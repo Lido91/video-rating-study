@@ -105,38 +105,17 @@ h1 { font-size: 26px; line-height: 1.25; margin: 0 0 16px; }
 .progress .bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
 #progress-fill { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
 
-/* Side-by-side videos. --cols and --rows are set from the number of videos in the round. */
-.grid {
-  display: grid;
-  grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
-  gap: 12px;
-}
-.tile {
-  margin: 0;
+.stage {
   background: var(--stage);
   border-radius: var(--radius);
   overflow: hidden;
-  border: 3px solid transparent;
-  transition: border-color .15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
 }
-.tile video {
-  display: block;
-  width: 100%;
-  height: auto;
-  /* Keep every row on screen at once so the videos can be compared. */
-  max-height: max(160px, calc((100vh - 300px) / var(--rows, 1)));
-  object-fit: contain;
-}
-.tile figcaption {
-  text-align: center;
-  font-weight: 700;
-  font-size: 18px;
-  padding: 6px 0;
-  color: #fff;
-  background: rgba(0, 0, 0, .35);
-}
-.tile.pickable { cursor: pointer; }
-.tile.selected { border-color: var(--accent); }
+/* Shown at its own size, scaled down only if wider than the page or taller than the screen allows. */
+.stage video { display: block; max-width: 100%; max-height: calc(100vh - 300px); min-height: 160px; }
 
 .rating-card { margin-top: 16px; padding-top: 18px; }
 
@@ -180,7 +159,6 @@ h1 { font-size: 26px; line-height: 1.25; margin: 0 0 16px; }
 @media (max-width: 700px) {
   main { padding-top: 16px; }
   .card { padding: 20px; }
-  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .tile video { max-height: none; }
-  .tile figcaption { font-size: 15px; padding: 3px 0; }
+  .stage { min-height: 0; }
+  .stage video { max-height: none; min-height: 0; }
 }

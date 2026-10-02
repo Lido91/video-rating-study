@@ -2,13 +2,12 @@
   "use strict";
 
   const cfg = window.STUDY_CONFIG || {};
-  const methods = window.STUDY_METHODS || [];
-  const samples = (window.STUDY_SAMPLES || []).filter((s) => s && s.id && s.videos && Object.keys(s.videos).length >= 2);
-  const sampleById = new Map(samples.map((s) => [s.id, s]));
+  const videos = (window.STUDY_VIDEOS || []).filter((v) => v && v.id && v.src);
+  const videoById = new Map(videos.map((v) => [v.id, v]));
+  const choices = (cfg.choices || ["A", "B", "C"]).map(String);
   const questions = (cfg.questions || []).filter((q) => q && q.id && q.text);
   const maxPlays = Math.max(1, Number(cfg.maxPlays) || 1);
   const demo = !cfg.scriptUrl;
-  const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
   const RATER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
   const PREFIX = `vrs:${cfg.studyId || "study"}`;
@@ -18,6 +17,7 @@
   const raterKey = (id) => `${PREFIX}:rater:${id}`;
 
   const $ = (id) => document.getElementById(id);
+  const player = $("player");
 
   // ---------- storage ----------
   const store = {
@@ -78,20 +78,12 @@
   }
 
   function buildOrder(raterId, savedOrder) {
-    const ids = samples.map((s) => s.id);
+    const ids = videos.map((v) => v.id);
     const fresh = cfg.randomizeOrder === false ? ids : shuffled(ids, `${cfg.studyId}:${raterId}`);
     if (!savedOrder) return fresh;
-    // Keep the saved order; drop samples that were removed and append any new ones.
-    const kept = savedOrder.filter((id) => sampleById.has(id));
+    // Keep the saved order; drop videos that were removed and append any new ones.
+    const kept = savedOrder.filter((id) => videoById.has(id));
     return kept.concat(fresh.filter((id) => !kept.includes(id)));
-  }
-
-  // Which method goes in position A, B, C... for this rater and sample.
-  function layoutFor(sample) {
-    const present = methods.filter((m) => sample.videos[m]);
-    for (const m of Object.keys(sample.videos)) if (!present.includes(m)) present.push(m);
-    if (cfg.randomizePositions === false) return present;
-    return shuffled(present, `${cfg.studyId}:${state.raterId}:${sample.id}`);
   }
 
   // ---------- saving ----------
@@ -155,9 +147,9 @@
   });
 
   // ---------- video loading ----------
-  // Each clip is downloaded fully before the round can be played, so buffering never
-  // interrupts playback or puts the videos out of step. The next round is fetched in
-  // the background while the current one is being answered.
+  // Each video is downloaded fully before it can be played, so buffering never
+  // interrupts playback (stalls would bias the judgement). The next video is
+  // fetched in the background while the current one is being answered.
   const loaded = new Map(); // src -> { progress, promise<url> }
 
   function fetchVideo(src) {
@@ -205,13 +197,9 @@
     entry.promise.then((url) => { if (url.startsWith("blob:")) URL.revokeObjectURL(url); });
   }
 
-  function prefetchSample(sample) {
-    for (const src of Object.values(sample.videos)) fetchVideo(src);
-  }
-
   // ---------- welcome ----------
   let state = null;   // { raterId, sessionId, order, done }
-  let trial = null;   // the round currently on screen
+  let trial = null;   // the video currently on screen
 
   function paragraphs(text, container) {
     container.textContent = "";
@@ -267,7 +255,7 @@
       raterId,
       sessionId: saved ? saved.sessionId : uuid(),
       order: buildOrder(raterId, saved && saved.order),
-      done: saved ? saved.done.filter((id) => sampleById.has(id)) : [],
+      done: saved ? saved.done.filter((id) => videoById.has(id)) : [],
     };
     saveState();
     nextTrial();
@@ -278,37 +266,7 @@
   }
 
   // ---------- trial ----------
-  function renderGrid(layout) {
-    const grid = $("grid");
-    grid.textContent = "";
-    const n = layout.length;
-    const cols = n <= 3 ? n : n === 4 ? 2 : 3;
-    grid.style.setProperty("--cols", cols);
-    grid.style.setProperty("--rows", Math.ceil(n / cols));
-    const players = layout.map((_, i) => {
-      const tile = document.createElement("figure");
-      tile.className = "tile";
-      const video = document.createElement("video");
-      video.playsInline = true;
-      video.preload = "auto";
-      video.muted = !(cfg.playAudio && i === 0);
-      video.disablePictureInPicture = true;
-      video.setAttribute("disablepictureinpicture", "");
-      // Block the right-click menu, which would otherwise offer "Show controls" (seeking, speed).
-      video.addEventListener("contextmenu", (e) => e.preventDefault());
-      const cap = document.createElement("figcaption");
-      cap.textContent = LETTERS[i];
-      tile.append(video, cap);
-      if (questions.length === 1) {
-        tile.addEventListener("click", () => choose(0, i));
-      }
-      grid.append(tile);
-      return video;
-    });
-    return players;
-  }
-
-  function renderQuestions(n, locked) {
+  function renderQuestions(locked) {
     const box = $("questions");
     box.textContent = "";
     questions.forEach((q, qi) => {
@@ -321,20 +279,20 @@
       row.className = "choices";
       row.setAttribute("role", "radiogroup");
       row.setAttribute("aria-labelledby", p.id);
-      row.style.setProperty("--n", n);
-      for (let i = 0; i < n; i++) {
+      row.style.setProperty("--n", choices.length);
+      choices.forEach((label, i) => {
         const input = document.createElement("input");
         input.type = "radio";
         input.name = `q${qi}`;
         input.id = `q${qi}-${i}`;
-        input.value = i;
+        input.value = label;
         input.disabled = locked;
         input.addEventListener("change", () => choose(qi, i));
         const lab = document.createElement("label");
         lab.htmlFor = input.id;
-        lab.textContent = LETTERS[i];
+        lab.textContent = label;
         row.append(input, lab);
-      }
+      });
       wrap.append(p, row);
       box.append(wrap);
     });
@@ -345,10 +303,7 @@
     const input = document.getElementById(`q${qi}-${i}`);
     if (!input || input.disabled) return;
     input.checked = true;
-    trial.answers[questions[qi].id] = i;
-    if (questions.length === 1) {
-      document.querySelectorAll(".tile").forEach((t, ti) => t.classList.toggle("selected", ti === i));
-    }
+    trial.answers[questions[qi].id] = choices[i];
     updateNext();
   }
 
@@ -356,7 +311,6 @@
     trial.locked = false;
     for (const el of document.querySelectorAll(".question")) el.classList.remove("locked");
     for (const el of document.querySelectorAll(".question input")) el.disabled = false;
-    if (questions.length === 1) document.querySelectorAll(".tile").forEach((t) => t.classList.add("pickable"));
   }
 
   function updateNext() {
@@ -364,11 +318,11 @@
     const watched = trial.watched || !cfg.requireFullWatch;
     $("next-btn").disabled = !trial.failed && !(answered && watched);
     let hint = "";
-    if (trial.failed) hint = "A video in this round can't be played in your browser. Click Next to skip it.";
+    if (trial.failed) hint = "This video can't be played in your browser. Click Next to skip it.";
     else if (!trial.ready) hint = "";
-    else if (!trial.plays) hint = "Press Play to watch all the videos together.";
-    else if (!watched) hint = "You can answer once the videos finish.";
-    else if (!answered) hint = questions.length > 1 ? "Answer every question to continue." : "Click the video you choose, or its letter below.";
+    else if (!trial.plays) hint = "Press Play to watch the video.";
+    else if (!watched) hint = "You can answer once the video finishes.";
+    else if (!answered) hint = questions.length > 1 ? "Answer every question to continue." : `Choose ${choices.join(", ")} to continue.`;
     $("trial-hint").textContent = hint;
   }
 
@@ -378,26 +332,21 @@
   }
 
   function nextTrial() {
-    if (trial) {
-      for (const v of trial.players) { v.removeAttribute("src"); v.load(); }
-      for (const src of Object.values(trial.sample.videos)) releaseVideo(src);
-    }
+    player.removeAttribute("src");
+    player.load();
+    if (trial) releaseVideo(trial.video.src);
     const remaining = state.order.filter((id) => !state.done.includes(id));
     if (!remaining.length) return finish();
 
-    const sample = sampleById.get(remaining[0]);
-    const layout = layoutFor(sample);
+    const video = videoById.get(remaining[0]);
     const position = state.done.length + 1;
     const total = state.order.length;
     trial = {
-      sample,
-      layout,
+      video,
       position,
-      players: renderGrid(layout),
       plays: 0,
       stalls: 0,
-      playing: layout.map(() => false),
-      ended: new Set(),
+      playing: false,
       watched: false,
       failed: false,
       ready: false,
@@ -407,71 +356,39 @@
       shownAt: Date.now(),
     };
 
-    $("progress-text").textContent = `Round ${position} of ${total}`;
+    $("progress-text").textContent = `Video ${position} of ${total}`;
     $("progress-fill").style.width = `${((position - 1) / total) * 100}%`;
-    renderQuestions(layout.length, trial.locked);
-    if (!trial.locked && questions.length === 1) document.querySelectorAll(".tile").forEach((t) => t.classList.add("pickable"));
+    renderQuestions(trial.locked);
     $("next-btn").disabled = true;
     setPlayButton("Loading…", false);
     show("trial");
     updateNext();
 
     const current = trial;
-    const entries = layout.map((m) => fetchVideo(sample.videos[m]));
+    const entry = fetchVideo(video.src);
     const ticker = setInterval(() => {
       if (current !== trial || current.ready) return clearInterval(ticker);
-      const p = entries.reduce((sum, e) => sum + e.progress, 0) / entries.length;
-      setPlayButton(`Loading… ${Math.round(p * 100)}%`, false);
+      setPlayButton(`Loading… ${Math.round(entry.progress * 100)}%`, false);
     }, 200);
 
-    Promise.all(entries.map((e) => e.promise)).then((urls) => {
+    entry.promise.then((url) => {
       clearInterval(ticker);
       if (current !== trial) return;
-      current.urls = urls.map((u) => new URL(u, location.href).href);
-      current.players.forEach((video, i) => attachEvents(current, video, i));
-      current.players.forEach((video, i) => { video.src = urls[i]; video.load(); });
-
+      current.url = new URL(url, location.href).href;
+      player.src = url;
+      player.load();
       // Some mobile browsers won't buffer before a tap, so enable Play after a short wait regardless.
-      let canPlay = 0;
       const enable = () => {
         if (current !== trial || current.ready || current.failed) return;
         current.ready = true;
         setPlayButton("▶ Play", true);
         updateNext();
       };
-      current.players.forEach((video) => video.addEventListener("canplaythrough", () => {
-        if (++canPlay === current.players.length) enable();
-      }, { once: true }));
-      setTimeout(enable, 3000);
+      player.addEventListener("canplaythrough", enable, { once: true });
+      setTimeout(enable, 2500);
 
-      const next = remaining[1] && sampleById.get(remaining[1]);
-      if (next) prefetchSample(next);
-    });
-  }
-
-  function attachEvents(t, video, i) {
-    video.addEventListener("playing", () => { t.playing[i] = true; });
-    video.addEventListener("waiting", () => { if (t.playing[i]) t.stalls += 1; });
-    video.addEventListener("ended", () => {
-      if (trial !== t) return;
-      t.playing[i] = false;
-      t.ended.add(i);
-      if (t.ended.size < t.players.length) return;
-      if (!t.watched) {
-        t.watched = true;
-        t.endedAt = Date.now();
-        unlock();
-      }
-      const left = maxPlays - t.plays;
-      setPlayButton(left > 0 ? `↻ Replay (${left} left)` : "No replays left", left > 0);
-      updateNext();
-    });
-    video.addEventListener("error", () => {
-      if (trial !== t || video.src !== t.urls[i]) return;
-      console.error("Video error", t.sample.videos[t.layout[i]], video.error);
-      t.failed = true;
-      setPlayButton("Video unavailable", false);
-      updateNext();
+      const next = remaining[1] && videoById.get(remaining[1]);
+      if (next) fetchVideo(next.src);
     });
   }
 
@@ -479,16 +396,53 @@
     const t = trial;
     if (!t || !t.ready || t.plays >= maxPlays) return;
     t.plays += 1;
-    t.playing = t.players.map(() => false);
-    t.ended.clear();
+    t.playing = false;
+    t.inPlay = true;
     setPlayButton("Playing…", false);
-    for (const v of t.players) { v.pause(); v.currentTime = 0; }
-    Promise.all(t.players.map((v) => v.play())).catch((err) => {
+    player.currentTime = 0;
+    player.play().catch((err) => {
       console.warn("Playback failed:", err);
-      for (const v of t.players) v.pause();
+      t.inPlay = false;
       t.plays -= 1;
       setPlayButton("▶ Play", true);
     });
+    updateNext();
+  });
+
+  // The browser can pause a video before it ends, e.g. when the rater switches tabs.
+  // Let them watch it again from the start; the interrupted play doesn't count.
+  player.addEventListener("pause", () => {
+    const t = trial;
+    if (!t || !t.inPlay || player.ended) return;
+    t.inPlay = false;
+    t.plays -= 1;
+    setPlayButton("▶ Play from start", true);
+    updateNext();
+  });
+
+  // Block the right-click menu, which would otherwise offer "Show controls" (seeking, speed).
+  player.addEventListener("contextmenu", (e) => e.preventDefault());
+  player.addEventListener("playing", () => { if (trial) trial.playing = true; });
+  player.addEventListener("waiting", () => { if (trial && trial.playing) trial.stalls += 1; });
+  player.addEventListener("ended", () => {
+    const t = trial;
+    if (!t) return;
+    t.playing = false;
+    t.inPlay = false;
+    if (!t.watched) {
+      t.watched = true;
+      t.endedAt = Date.now();
+      unlock();
+    }
+    const left = maxPlays - t.plays;
+    setPlayButton(left > 0 ? `↻ Replay (${left} left)` : "No replays left", left > 0);
+    updateNext();
+  });
+  player.addEventListener("error", () => {
+    if (!trial || !trial.url || player.src !== trial.url) return;
+    console.error("Video error", trial.video.src, player.error);
+    trial.failed = true;
+    setPlayButton("Video unavailable", false);
     updateNext();
   });
 
@@ -500,28 +454,26 @@
       study_id: cfg.studyId || "study",
       rater_id: state.raterId,
       session_id: state.sessionId,
-      sample_id: t.sample.id,
-      methods_shown: t.layout.join("|"),
+      video_id: t.video.id,
+      options: choices.join("|"),
       trial_index: t.position,
       plays: t.plays,
       stalls: t.stalls,
+      video_seconds: Number.isFinite(player.duration) ? Math.round(player.duration * 100) / 100 : 0,
       response_ms: Date.now() - (t.endedAt || t.shownAt),
       screen: `${screen.width}x${screen.height}`,
       client_time: new Date().toISOString(),
     };
     const rows = t.failed
-      ? [{ ...base, submission_id: uuid(), question: questions[0].id, choice: "", choice_position: "", note: "playback_error" }]
-      : questions.map((q) => {
-        const i = t.answers[q.id];
-        return { ...base, submission_id: uuid(), question: q.id, choice: t.layout[i], choice_position: LETTERS[i], note: "" };
-      });
+      ? [{ ...base, submission_id: uuid(), question: questions[0].id, choice: "", note: "playback_error" }]
+      : questions.map((q) => ({ ...base, submission_id: uuid(), question: q.id, choice: t.answers[q.id], note: "" }));
     record(rows);
-    state.done.push(t.sample.id);
+    state.done.push(t.video.id);
     saveState();
     nextTrial();
   });
 
-  // Keyboard: letter or number keys pick a video (single-question studies), Enter goes next.
+  // Keyboard: a choice's letter (or 1, 2, 3…) picks it in single-question studies; Enter goes next.
   document.addEventListener("keydown", (e) => {
     if ($("screen-trial").hidden || !trial || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Enter" && !$("next-btn").disabled) {
@@ -530,16 +482,14 @@
       return;
     }
     if (questions.length !== 1) return;
-    let i = -1;
-    if (/^[1-9]$/.test(e.key)) i = Number(e.key) - 1;
-    else if (/^[a-z]$/i.test(e.key)) i = LETTERS.indexOf(e.key.toUpperCase());
-    if (i >= 0 && i < trial.layout.length) choose(0, i);
+    let i = choices.findIndex((c) => c.toLowerCase() === e.key.toLowerCase());
+    if (i < 0 && /^[1-9]$/.test(e.key)) i = Number(e.key) - 1;
+    if (i >= 0 && i < choices.length) choose(0, i);
   });
 
   // ---------- done ----------
   function finish() {
     trial = null;
-    $("grid").textContent = "";
     if (cfg.completionCode) {
       $("completion-code").textContent = cfg.completionCode;
       $("code-box").hidden = false;
@@ -550,8 +500,8 @@
     flush();
   }
 
-  const CSV_COLUMNS = ["study_id", "rater_id", "sample_id", "question", "choice", "choice_position", "methods_shown",
-    "trial_index", "plays", "stalls", "response_ms", "note", "screen", "session_id", "client_time", "submission_id"];
+  const CSV_COLUMNS = ["study_id", "rater_id", "video_id", "question", "choice", "options", "trial_index", "plays",
+    "stalls", "video_seconds", "response_ms", "note", "screen", "session_id", "client_time", "submission_id"];
 
   $("download-btn").addEventListener("click", () => {
     const rows = store.get(LOCAL_KEY, []).filter((r) => r.rater_id === state.raterId);
@@ -579,10 +529,10 @@
     } catch { /* ignore */ }
   }
 
-  if (!samples.length) {
-    showMessage("No videos yet", "Put each method's videos in its own folder under videos/ and run make_video_list.py (see README).");
-  } else if (!questions.length) {
-    showMessage("No questions configured", "Add at least one question to config.js.");
+  if (!videos.length) {
+    showMessage("No videos yet", "Add video files to the videos/ folder and run make_video_list.py (see README).");
+  } else if (!questions.length || choices.length < 2) {
+    showMessage("Study not configured", "config.js needs at least one question and at least two choices.");
   } else {
     renderWelcome();
   }

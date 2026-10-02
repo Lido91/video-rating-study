@@ -1,1 +1,3 @@
 .DS_Store
+# The A/B/C → method mapping stays private (fill it in the Google Sheet instead)
+mapping*.csv

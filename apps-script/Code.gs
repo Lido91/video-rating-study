@@ -5,27 +5,29 @@
  * then Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone).
  * See README.md for the full steps.
  *
- * Sheets it maintains:
- *   Ratings — one row per (rater, round, question): which method the rater chose.
- *             Never edited by the script after writing.
+ * Sheets:
+ *   Ratings — one row per (rater, video, question): which version (A, B, C...) was chosen.
+ *             Written by the script, never edited after writing.
+ *   Mapping — filled in by you: which method is A, B, C... in each video.
+ *             Use * as the video_id for an order that applies to every video not listed.
  *   Summary — preference rate per method (with 95% CI), a position-bias check,
- *             and vote counts per sample. Rebuilt on every save.
+ *             and per-video vote counts. Rebuilt on every save and whenever Mapping is edited.
  */
 
 var RATINGS_SHEET = 'Ratings';
+var MAPPING_SHEET = 'Mapping';
 var SUMMARY_SHEET = 'Summary';
 
 var COLUMNS = [
-  'timestamp', 'study_id', 'rater_id', 'sample_id', 'question', 'choice', 'choice_position',
-  'methods_shown', 'trial_index', 'plays', 'stalls', 'response_ms', 'note',
+  'timestamp', 'study_id', 'rater_id', 'video_id', 'question', 'choice', 'options',
+  'trial_index', 'plays', 'stalls', 'video_seconds', 'response_ms', 'note',
   'screen', 'session_id', 'client_time', 'submission_id'
 ];
 // Columns stored as plain text so ids like "007" or "1-2" aren't turned into numbers or dates.
-var TEXT_COLUMNS = ['study_id', 'rater_id', 'sample_id', 'question', 'choice', 'choice_position',
-  'methods_shown', 'note', 'screen', 'session_id', 'client_time', 'submission_id'];
+var TEXT_COLUMNS = ['study_id', 'rater_id', 'video_id', 'question', 'choice', 'options',
+  'note', 'screen', 'session_id', 'client_time', 'submission_id'];
 
 var MAX_ROWS_PER_REQUEST = 100;
-var LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 // ---------- web endpoints ----------
 
@@ -93,10 +95,16 @@ function onOpen() {
     .addToUi();
 }
 
+// Rebuild the summary as soon as you change the Mapping tab.
+function onEdit(e) {
+  if (e && e.range && e.range.getSheet().getName() === MAPPING_SHEET) updateSummary_();
+}
+
 // Run once from the Apps Script editor (select "setup", press Run) to create the sheets
 // and grant the script permission to edit this spreadsheet.
 function setup() {
   ratingsSheet_();
+  mappingSheet_();
   updateSummary_();
 }
 
@@ -108,38 +116,37 @@ function refreshSummary() {
 
 var ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 var TOKEN_RE = /^[A-Za-z0-9_-]{1,64}$/;
-// Sample ids are file paths and methods are folder names. Neither may start with
-// "=" "+" "-" "@" (so a value can never be read as a formula) or contain "|".
-var SAMPLE_RE = /^[A-Za-z0-9_][^\u0000-\u001f\u007f|]{0,199}$/;
-var METHOD_RE = /^[A-Za-z0-9_][A-Za-z0-9_. -]{0,63}$/;
+// Video ids are relative file paths. The first character must be a letter, digit or _
+// so a value can never start with "=" "+" "-" "@" and be read as a formula.
+var VIDEO_RE = /^[A-Za-z0-9_][^\u0000-\u001f\u007f]{0,199}$/;
+var LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,31}$/;
 
 function validate_(r) {
   if (!r || typeof r !== 'object') return 'not an object';
   if (!ID_RE.test(String(r.study_id))) return 'bad study_id';
   if (!ID_RE.test(String(r.rater_id))) return 'bad rater_id';
-  if (!SAMPLE_RE.test(String(r.sample_id))) return 'bad sample_id';
+  if (!VIDEO_RE.test(String(r.video_id))) return 'bad video_id';
   if (!ID_RE.test(String(r.question))) return 'bad question';
   if (!TOKEN_RE.test(String(r.session_id))) return 'bad session_id';
   if (!TOKEN_RE.test(String(r.submission_id))) return 'bad submission_id';
 
-  var shown = String(r.methods_shown || '').split('|');
-  if (shown.length < 2 || shown.length > LETTERS.length) return 'bad methods_shown';
+  var options = String(r.options || '').split('|');
+  if (options.length < 2 || options.length > 26) return 'bad options';
   var unique = {};
-  for (var i = 0; i < shown.length; i++) {
-    if (!METHOD_RE.test(shown[i]) || unique[shown[i]]) return 'bad methods_shown';
-    unique[shown[i]] = true;
+  for (var i = 0; i < options.length; i++) {
+    if (!LABEL_RE.test(options[i]) || unique[options[i]]) return 'bad options';
+    unique[options[i]] = true;
   }
   if (r.note === 'playback_error') {
-    if (r.choice || r.choice_position) return 'choice with playback_error';
+    if (r.choice) return 'choice with playback_error';
   } else {
     if (r.note) return 'bad note';
-    var pos = shown.indexOf(String(r.choice));
-    if (pos < 0) return 'choice not among methods_shown';
-    if (r.choice_position !== LETTERS[pos]) return 'choice_position does not match choice';
+    if (options.indexOf(String(r.choice)) < 0) return 'choice not among options';
   }
   if (!isInt_(r.trial_index, 1, 100000)) return 'bad trial_index';
   if (!isInt_(r.plays, 0, 1000)) return 'bad plays';
   if (!isInt_(r.stalls, 0, 100000)) return 'bad stalls';
+  if (typeof r.video_seconds !== 'number' || !(r.video_seconds >= 0 && r.video_seconds < 1e6)) return 'bad video_seconds';
   if (!isInt_(r.response_ms, 0, 1e9)) return 'bad response_ms';
   if (r.screen && !/^\d{1,5}x\d{1,5}$/.test(String(r.screen))) return 'bad screen';
   if (r.client_time && !/^[0-9T:.\-Z+]{1,40}$/.test(String(r.client_time))) return 'bad client_time';
@@ -150,6 +157,39 @@ function isInt_(v, min, max) {
   return typeof v === 'number' && Math.floor(v) === v && v >= min && v <= max;
 }
 
+// ---------- mapping ----------
+
+// Returns { videoId: { A: 'ours', B: 'baseline1', ... } }. Row "*" is the default.
+function readMapping_() {
+  var values = mappingSheet_().getDataRange().getValues();
+  var head = (values.shift() || []).map(function (h) { return String(h).trim(); });
+  var map = {};
+  values.forEach(function (row) {
+    var video = String(row[0]).trim();
+    if (!video) return;
+    var m = {};
+    var any = false;
+    for (var j = 1; j < head.length; j++) {
+      var method = String(row[j] === undefined ? '' : row[j]).trim();
+      if (head[j] && method) { m[head[j]] = method; any = true; }
+    }
+    if (any) map[video] = m;
+  });
+  return map;
+}
+
+// The method for each option label of a video, or null if the mapping is incomplete.
+function methodsFor_(map, video, options) {
+  var m = map[video] || map[video.replace(/\.[^.\/]+$/, '')] || map['*'];
+  if (!m) return null;
+  var out = [];
+  for (var i = 0; i < options.length; i++) {
+    if (!m[options[i]]) return null;
+    out.push(m[options[i]]);
+  }
+  return out;
+}
+
 // ---------- summary ----------
 
 function updateSummary_() {
@@ -158,51 +198,61 @@ function updateSummary_() {
   var header = data.shift() || [];
   var col = {};
   header.forEach(function (h, i) { col[h] = i; });
+  var map = readMapping_();
+  var hasMapping = Object.keys(map).length > 0;
 
-  var methods = [];          // every method seen, in first-seen order
   var questions = [];
-  var byMethod = {};         // q|method -> {chosen, shown, chance}
-  var byPosition = {};       // q|letter -> {chosen, shown}
-  var bySample = {};         // sample|q -> {counts{method}, n, raters{}, errors}
-  var sampleKeys = [];
-  var maxPositions = 0;
+  var labels = [];           // every option label seen, in first-seen order
+  var methods = [];          // every mapped method seen
+  var byMethod = {};         // q|method -> { chosen, shown, chanceSum }
+  var byLabel = {};          // q|label  -> { chosen, shown }
+  var byVideo = {};          // video|q  -> { labels{}, methods{}, n, raters{}, errors, mapping }
+  var videoKeys = [];
+  var unmapped = 0;
 
   data.forEach(function (row) {
-    var sample = String(row[col.sample_id]);
+    var video = String(row[col.video_id]);
     var q = String(row[col.question]);
-    if (!sample) return;
-    var shown = String(row[col.methods_shown]).split('|');
-    shown.forEach(function (m) { if (methods.indexOf(m) < 0) methods.push(m); });
+    if (!video) return;
+    var options = String(row[col.options]).split('|');
+    options.forEach(function (l) { if (labels.indexOf(l) < 0) labels.push(l); });
     if (questions.indexOf(q) < 0) questions.push(q);
+    var mapped = methodsFor_(map, video, options);
 
-    var sk = sample + '\u0000' + q;
-    var s = bySample[sk];
-    if (!s) {
-      s = bySample[sk] = { sample: sample, question: q, counts: {}, n: 0, raters: {}, errors: 0 };
-      sampleKeys.push(sk);
+    var vk = video + '\u0000' + q;
+    var v = byVideo[vk];
+    if (!v) {
+      v = byVideo[vk] = { video: video, question: q, labels: {}, methods: {}, n: 0, raters: {}, errors: 0,
+        mapping: mapped ? options.map(function (l, i) { return l + '=' + mapped[i]; }).join(', ') : '' };
+      videoKeys.push(vk);
     }
     if (row[col.note] === 'playback_error' || !row[col.choice]) {
-      s.errors += 1;
+      v.errors += 1;
       return;
     }
     var choice = String(row[col.choice]);
-    s.n += 1;
-    s.counts[choice] = (s.counts[choice] || 0) + 1;
-    s.raters[row[col.rater_id]] = true;
+    v.n += 1;
+    v.labels[choice] = (v.labels[choice] || 0) + 1;
+    v.raters[row[col.rater_id]] = true;
 
-    shown.forEach(function (m, i) {
+    options.forEach(function (l) {
+      var lk = q + '\u0000' + l;
+      var e = byLabel[lk] || (byLabel[lk] = { chosen: 0, shown: 0 });
+      e.shown += 1;
+      if (l === choice) e.chosen += 1;
+    });
+
+    if (!mapped) { unmapped += 1; return; }
+    var chosenMethod = mapped[options.indexOf(choice)];
+    v.methods[chosenMethod] = (v.methods[chosenMethod] || 0) + 1;
+    mapped.forEach(function (m) {
+      if (methods.indexOf(m) < 0) methods.push(m);
       var mk = q + '\u0000' + m;
       var e = byMethod[mk] || (byMethod[mk] = { chosen: 0, shown: 0, chanceSum: 0 });
       e.shown += 1;
-      e.chanceSum += 1 / shown.length;
-      if (m === choice) e.chosen += 1;
-
-      var pk = q + '\u0000' + LETTERS[i];
-      var p = byPosition[pk] || (byPosition[pk] = { chosen: 0, shown: 0 });
-      p.shown += 1;
-      if (m === choice) p.chosen += 1;
+      e.chanceSum += 1 / options.length;
+      if (m === chosenMethod) e.chosen += 1;
     });
-    maxPositions = Math.max(maxPositions, shown.length);
   });
 
   var rows = [];
@@ -221,9 +271,13 @@ function updateSummary_() {
     rows.push(row);
     blocks[blocks.length - 1].count += 1;
   }
+  function note(text) {
+    rows.push([text]);
+    blocks.push({ start: rows.length, count: 0, pct: [] });
+  }
 
-  section('Preference by method — share of rounds in which the method was chosen',
-    ['question', 'method', 'chosen', 'rounds shown', 'preference', '95% CI low', '95% CI high', 'chance level'],
+  section('Preference by method — share of answers in which the method was chosen',
+    ['question', 'method', 'chosen', 'answers', 'preference', '95% CI low', '95% CI high', 'chance level'],
     [4, 5, 6, 7]);
   questions.forEach(function (q) {
     methods.forEach(function (m) {
@@ -233,24 +287,32 @@ function updateSummary_() {
       add([q, m, e.chosen, e.shown, e.chosen / e.shown, ci[0], ci[1], e.chanceSum / e.shown]);
     });
   });
+  if (!hasMapping) {
+    note('Fill in the Mapping tab (which method is A, B, C in each video) to see results per method.');
+  } else if (unmapped) {
+    note(unmapped + ' answer(s) are for videos missing from the Mapping tab and are not counted in this table.');
+  }
 
-  section('Position check — should be close to chance if raters are not biased by position (A = left-most)',
-    ['question', 'position', 'chosen', 'rounds', 'share'], [4]);
+  section('Position check — should be close to chance if raters are not biased by position',
+    ['question', 'position', 'chosen', 'answers', 'share'], [4]);
   questions.forEach(function (q) {
-    for (var i = 0; i < maxPositions; i++) {
-      var p = byPosition[q + '\u0000' + LETTERS[i]];
-      if (p) add([q, LETTERS[i], p.chosen, p.shown, p.chosen / p.shown]);
-    }
+    labels.forEach(function (l) {
+      var e = byLabel[q + '\u0000' + l];
+      if (e) add([q, l, e.chosen, e.shown, e.chosen / e.shown]);
+    });
   });
 
-  section('Per sample — how many raters chose each method',
-    ['sample_id', 'question', 'n'].concat(methods, ['unique_raters', 'playback_errors']), []);
-  sampleKeys.sort();
-  sampleKeys.forEach(function (sk) {
-    var s = bySample[sk];
-    add([s.sample, s.question, s.n]
-      .concat(methods.map(function (m) { return s.counts[m] || 0; }))
-      .concat([Object.keys(s.raters).length, s.errors]));
+  section('Per video — how many raters chose each version',
+    ['video_id', 'question', 'n'].concat(labels, ['mapping'],
+      methods.map(function (m) { return '# ' + m; }), ['unique_raters', 'playback_errors']), []);
+  videoKeys.sort();
+  videoKeys.forEach(function (vk) {
+    var v = byVideo[vk];
+    add([v.video, v.question, v.n]
+      .concat(labels.map(function (l) { return v.labels[l] || 0; }))
+      .concat([v.mapping])
+      .concat(methods.map(function (m) { return v.mapping ? (v.methods[m] || 0) : ''; }))
+      .concat([Object.keys(v.raters).length, v.errors]));
   });
 
   var width = 1;
@@ -265,7 +327,7 @@ function updateSummary_() {
   sheet.clear();
   if (sheet.getMaxRows() < rows.length) sheet.insertRowsAfter(sheet.getMaxRows(), rows.length - sheet.getMaxRows());
   if (sheet.getMaxColumns() < width) sheet.insertColumnsAfter(sheet.getMaxColumns(), width - sheet.getMaxColumns());
-  // The first two columns hold ids (sample, question, method): keep them as text so "001" stays "001".
+  // The first two columns hold ids (video, question, method): keep them as text so "001" stays "001".
   sheet.getRange(1, 1, rows.length, 2).setNumberFormat('@');
   blocks.forEach(function (b) {
     if (!b.count) return;
@@ -294,6 +356,22 @@ function ratingsSheet_() {
   if (!sheet) {
     sheet = ss.insertSheet(RATINGS_SHEET, 0);
     sheet.getRange(1, 1, 1, COLUMNS.length).setValues([COLUMNS]).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function mappingSheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(MAPPING_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(MAPPING_SHEET);
+    sheet.getRange(1, 1, sheet.getMaxRows(), 1).setNumberFormat('@');
+    sheet.getRange(1, 1, 1, 4).setValues([['video_id', 'A', 'B', 'C']]).setFontWeight('bold');
+    sheet.getRange(1, 1).setNote(
+      'One row per video: the method shown as A, B, C (add columns for more positions).\n' +
+      'video_id is the file path inside videos/, e.g. clip01.mp4 (the extension may be left out).\n' +
+      'If every video uses the same order, fill in a single row with * as the video_id.');
     sheet.setFrozenRows(1);
   }
   return sheet;
