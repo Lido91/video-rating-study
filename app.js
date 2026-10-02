@@ -322,7 +322,7 @@
     else if (!trial.ready) hint = "";
     else if (!trial.plays) hint = "Press Play to watch the video.";
     else if (!watched) hint = "You can answer once the video finishes.";
-    else if (!answered) hint = questions.length > 1 ? "Answer every question to continue." : `Choose ${choices.join(", ")} to continue.`;
+    else if (!answered) hint = questions.length > 1 ? "Answer every question to continue." : `Choose ${choices.slice(0, -1).join(", ")} or ${choices[choices.length - 1]} to continue.`;
     $("trial-hint").textContent = hint;
   }
 

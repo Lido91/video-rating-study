@@ -41,7 +41,7 @@ It also warns you about:
 
 > **Reduce position bias.** People tend to favor one position, often the left one. When you make the videos, vary which method is in A, B and C from video to video, ideally so each method appears in each position equally often. The Summary's position check shows whether raters favored a position.
 
-Each video's ID in the results is its path inside `videos/`, e.g. `set1/clip01.mp4`. Raters see the video at its own size, scaled down only if it's wider than the page (1280 px) or too tall for the screen.
+Each video's ID in the results is its path inside `videos/`, e.g. `set1/clip01.mp4`. Raters see the video at its own size, scaled down only if it doesn't fit the screen.
 
 ## 2. Set up the Google Sheet
 
