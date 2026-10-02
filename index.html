@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video Rating Study</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="demo-banner" class="banner" hidden>
+    Demo mode: no Google Sheet is connected, so ratings are saved only in this browser.
+  </div>
+
+  <main>
+    <!-- Welcome -->
+    <section id="screen-welcome" class="screen card" hidden>
+      <h1 id="study-title"></h1>
+      <div id="instructions" class="prose"></div>
+
+      <div id="scale-preview" class="scale-preview"></div>
+
+      <form id="start-form" novalidate>
+        <label id="rater-field" class="field">
+          <span>Participant ID</span>
+          <input id="rater-id" name="rater" autocomplete="off" spellcheck="false"
+                 placeholder="e.g. P017" maxlength="64">
+          <small>Letters, numbers, - and _ only. Use the same ID to resume later.</small>
+        </label>
+        <label id="consent-field" class="check">
+          <input id="consent" type="checkbox">
+          <span id="consent-text"></span>
+        </label>
+        <p id="start-error" class="error" role="alert"></p>
+        <button id="start-btn" class="btn primary" type="submit">Start</button>
+      </form>
+    </section>
+
+    <!-- Trial -->
+    <section id="screen-trial" class="screen" hidden>
+      <div class="progress">
+        <span id="progress-text"></span>
+        <div class="bar"><div id="progress-fill"></div></div>
+      </div>
+
+      <div class="stage">
+        <video id="player" playsinline preload="auto" disablepictureinpicture
+               controlslist="nodownload noplaybackrate nofullscreen"></video>
+        <div id="overlay" class="overlay">
+          <button id="play-btn" class="btn play" type="button" disabled>Loading…</button>
+        </div>
+      </div>
+
+      <div class="card rating-card">
+        <div id="questions"></div>
+        <div class="row">
+          <span id="trial-hint" class="hint"></span>
+          <button id="next-btn" class="btn primary" type="button" disabled>Next</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Done -->
+    <section id="screen-done" class="screen card" hidden>
+      <h1>Thank you!</h1>
+      <p>You have rated all the videos.</p>
+      <p id="save-status" class="hint"></p>
+      <div id="code-box" class="code-box" hidden>
+        <span>Your completion code</span>
+        <strong id="completion-code"></strong>
+      </div>
+      <button id="download-btn" class="btn" type="button" hidden>Download my ratings (CSV)</button>
+    </section>
+
+    <!-- Message (errors, no videos) -->
+    <section id="screen-message" class="screen card" hidden>
+      <h1 id="message-title"></h1>
+      <p id="message-body"></p>
+    </section>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="videos.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
