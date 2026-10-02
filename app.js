@@ -2,11 +2,13 @@
   "use strict";
 
   const cfg = window.STUDY_CONFIG || {};
-  const videos = (window.STUDY_VIDEOS || []).filter((v) => v && v.id && v.src);
-  const videoById = new Map(videos.map((v) => [v.id, v]));
-  const questions = (cfg.questions || []).filter((q) => q && q.id && q.labels && q.labels.length);
+  const methods = window.STUDY_METHODS || [];
+  const samples = (window.STUDY_SAMPLES || []).filter((s) => s && s.id && s.videos && Object.keys(s.videos).length >= 2);
+  const sampleById = new Map(samples.map((s) => [s.id, s]));
+  const questions = (cfg.questions || []).filter((q) => q && q.id && q.text);
   const maxPlays = Math.max(1, Number(cfg.maxPlays) || 1);
   const demo = !cfg.scriptUrl;
+  const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
   const RATER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
   const PREFIX = `vrs:${cfg.studyId || "study"}`;
@@ -16,7 +18,6 @@
   const raterKey = (id) => `${PREFIX}:rater:${id}`;
 
   const $ = (id) => document.getElementById(id);
-  const player = $("player");
 
   // ---------- storage ----------
   const store = {
@@ -77,12 +78,20 @@
   }
 
   function buildOrder(raterId, savedOrder) {
-    const ids = videos.map((v) => v.id);
+    const ids = samples.map((s) => s.id);
     const fresh = cfg.randomizeOrder === false ? ids : shuffled(ids, `${cfg.studyId}:${raterId}`);
     if (!savedOrder) return fresh;
-    // Keep the saved order; drop videos that were removed and append any new ones.
-    const kept = savedOrder.filter((id) => videoById.has(id));
+    // Keep the saved order; drop samples that were removed and append any new ones.
+    const kept = savedOrder.filter((id) => sampleById.has(id));
     return kept.concat(fresh.filter((id) => !kept.includes(id)));
+  }
+
+  // Which method goes in position A, B, C... for this rater and sample.
+  function layoutFor(sample) {
+    const present = methods.filter((m) => sample.videos[m]);
+    for (const m of Object.keys(sample.videos)) if (!present.includes(m)) present.push(m);
+    if (cfg.randomizePositions === false) return present;
+    return shuffled(present, `${cfg.studyId}:${state.raterId}:${sample.id}`);
   }
 
   // ---------- saving ----------
@@ -95,7 +104,7 @@
     if (demo) {
       const local = store.get(LOCAL_KEY, []);
       store.set(LOCAL_KEY, local.concat(rows));
-      console.info("[demo] rating rows", rows);
+      console.info("[demo] answer rows", rows);
       return;
     }
     queue = queue.concat(rows);
@@ -121,7 +130,7 @@
       }
       retryDelay = 2000;
     } catch (err) {
-      console.warn("Could not save ratings yet, will retry:", err);
+      console.warn("Could not save answers yet, will retry:", err);
       retryTimer = setTimeout(flush, retryDelay);
       retryDelay = Math.min(retryDelay * 2, 60000);
     } finally {
@@ -132,9 +141,9 @@
 
   function updateSaveStatus() {
     const el = $("save-status");
-    if (demo) el.textContent = "Demo mode: your ratings are stored in this browser only.";
-    else if (queue.length) el.textContent = "Saving your ratings… please keep this page open.";
-    else el.textContent = "All your ratings have been saved. You can close this page.";
+    if (demo) el.textContent = "Demo mode: your answers are stored in this browser only.";
+    else if (queue.length) el.textContent = "Saving your answers… please keep this page open.";
+    else el.textContent = "All your answers have been saved. You can close this page.";
   }
 
   window.addEventListener("online", flush);
@@ -146,17 +155,17 @@
   });
 
   // ---------- video loading ----------
-  // Each clip is downloaded fully before it can be played, so buffering never
-  // interrupts playback (stalls would bias quality ratings). The next clip is
-  // fetched in the background while the current one is being rated.
-  const loaded = new Map(); // video id -> { progress, promise<url> }
+  // Each clip is downloaded fully before the round can be played, so buffering never
+  // interrupts playback or puts the videos out of step. The next round is fetched in
+  // the background while the current one is being answered.
+  const loaded = new Map(); // src -> { progress, promise<url> }
 
-  function fetchVideo(video) {
-    if (loaded.has(video.id)) return loaded.get(video.id);
+  function fetchVideo(src) {
+    if (loaded.has(src)) return loaded.get(src);
     const entry = { progress: 0 };
     entry.promise = (async () => {
       try {
-        const res = await fetch(video.src);
+        const res = await fetch(src);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const type = res.headers.get("content-type") || "";
         const total = Number(res.headers.get("content-length")) || 0;
@@ -180,25 +189,29 @@
         return URL.createObjectURL(blob);
       } catch (err) {
         // e.g. opened from file:// — fall back to streaming the file directly.
-        console.warn(`Streaming ${video.src} instead of preloading:`, err);
+        console.warn(`Streaming ${src} instead of preloading:`, err);
         entry.progress = 1;
-        return video.src;
+        return src;
       }
     })();
-    loaded.set(video.id, entry);
+    loaded.set(src, entry);
     return entry;
   }
 
-  function releaseVideo(id) {
-    const entry = loaded.get(id);
+  function releaseVideo(src) {
+    const entry = loaded.get(src);
     if (!entry) return;
-    loaded.delete(id);
+    loaded.delete(src);
     entry.promise.then((url) => { if (url.startsWith("blob:")) URL.revokeObjectURL(url); });
+  }
+
+  function prefetchSample(sample) {
+    for (const src of Object.values(sample.videos)) fetchVideo(src);
   }
 
   // ---------- welcome ----------
   let state = null;   // { raterId, sessionId, order, done }
-  let trial = null;   // the video currently on screen
+  let trial = null;   // the round currently on screen
 
   function paragraphs(text, container) {
     container.textContent = "";
@@ -211,33 +224,14 @@
   }
 
   function renderWelcome() {
-    document.title = cfg.title || "Video Rating Study";
-    $("study-title").textContent = cfg.title || "Video Rating Study";
+    document.title = cfg.title || "Video Comparison Study";
+    $("study-title").textContent = cfg.title || "Video Comparison Study";
     paragraphs(cfg.instructions, $("instructions"));
-
-    const preview = $("scale-preview");
-    preview.textContent = "";
-    for (const q of questions) {
-      const div = document.createElement("div");
-      const strong = document.createElement("strong");
-      strong.textContent = q.text;
-      const ol = document.createElement("ol");
-      q.labels.forEach((label, i) => {
-        const li = document.createElement("li");
-        li.textContent = `${i + 1} = ${label}`;
-        ol.append(li);
-      });
-      div.append(strong, ol);
-      preview.append(div);
-    }
 
     const params = new URLSearchParams(location.search);
     const fromUrl = params.get("id") || params.get("PROLIFIC_PID") || params.get("pid") || params.get("participant") || "";
-    if (cfg.askRaterId === false) {
-      $("rater-field").hidden = true;
-    } else {
-      $("rater-id").value = fromUrl;
-    }
+    if (cfg.askRaterId === false) $("rater-field").hidden = true;
+    else $("rater-id").value = fromUrl;
     if (cfg.consent) $("consent-text").textContent = cfg.consent;
     else $("consent-field").hidden = true;
 
@@ -273,7 +267,7 @@
       raterId,
       sessionId: saved ? saved.sessionId : uuid(),
       order: buildOrder(raterId, saved && saved.order),
-      done: saved ? saved.done.filter((id) => videoById.has(id)) : [],
+      done: saved ? saved.done.filter((id) => sampleById.has(id)) : [],
     };
     saveState();
     nextTrial();
@@ -284,7 +278,37 @@
   }
 
   // ---------- trial ----------
-  function renderQuestions(locked) {
+  function renderGrid(layout) {
+    const grid = $("grid");
+    grid.textContent = "";
+    const n = layout.length;
+    const cols = n <= 3 ? n : n === 4 ? 2 : 3;
+    grid.style.setProperty("--cols", cols);
+    grid.style.setProperty("--rows", Math.ceil(n / cols));
+    const players = layout.map((_, i) => {
+      const tile = document.createElement("figure");
+      tile.className = "tile";
+      const video = document.createElement("video");
+      video.playsInline = true;
+      video.preload = "auto";
+      video.muted = !(cfg.playAudio && i === 0);
+      video.disablePictureInPicture = true;
+      video.setAttribute("disablepictureinpicture", "");
+      // Block the right-click menu, which would otherwise offer "Show controls" (seeking, speed).
+      video.addEventListener("contextmenu", (e) => e.preventDefault());
+      const cap = document.createElement("figcaption");
+      cap.textContent = LETTERS[i];
+      tile.append(video, cap);
+      if (questions.length === 1) {
+        tile.addEventListener("click", () => choose(0, i));
+      }
+      grid.append(tile);
+      return video;
+    });
+    return players;
+  }
+
+  function renderQuestions(n, locked) {
     const box = $("questions");
     box.textContent = "";
     questions.forEach((q, qi) => {
@@ -293,154 +317,178 @@
       const p = document.createElement("p");
       p.id = `q${qi}-label`;
       p.textContent = q.text;
-      const scale = document.createElement("div");
-      scale.className = "scale";
-      scale.setAttribute("role", "radiogroup");
-      scale.setAttribute("aria-labelledby", p.id);
-      scale.style.setProperty("--n", q.labels.length);
-      q.labels.forEach((label, i) => {
-        const value = i + 1;
+      const row = document.createElement("div");
+      row.className = "choices";
+      row.setAttribute("role", "radiogroup");
+      row.setAttribute("aria-labelledby", p.id);
+      row.style.setProperty("--n", n);
+      for (let i = 0; i < n; i++) {
         const input = document.createElement("input");
         input.type = "radio";
         input.name = `q${qi}`;
-        input.id = `q${qi}-${value}`;
-        input.value = value;
+        input.id = `q${qi}-${i}`;
+        input.value = i;
         input.disabled = locked;
-        input.addEventListener("change", () => {
-          trial.answers[q.id] = value;
-          updateNext();
-        });
+        input.addEventListener("change", () => choose(qi, i));
         const lab = document.createElement("label");
         lab.htmlFor = input.id;
-        const num = document.createElement("strong");
-        num.textContent = value;
-        const text = document.createElement("span");
-        text.textContent = label;
-        lab.append(num, text);
-        scale.append(input, lab);
-      });
-      wrap.append(p, scale);
+        lab.textContent = LETTERS[i];
+        row.append(input, lab);
+      }
+      wrap.append(p, row);
       box.append(wrap);
     });
   }
 
-  function unlockQuestions() {
+  function choose(qi, i) {
+    if (!trial || trial.locked) return;
+    const input = document.getElementById(`q${qi}-${i}`);
+    if (!input || input.disabled) return;
+    input.checked = true;
+    trial.answers[questions[qi].id] = i;
+    if (questions.length === 1) {
+      document.querySelectorAll(".tile").forEach((t, ti) => t.classList.toggle("selected", ti === i));
+    }
+    updateNext();
+  }
+
+  function unlock() {
+    trial.locked = false;
     for (const el of document.querySelectorAll(".question")) el.classList.remove("locked");
     for (const el of document.querySelectorAll(".question input")) el.disabled = false;
+    if (questions.length === 1) document.querySelectorAll(".tile").forEach((t) => t.classList.add("pickable"));
   }
 
   function updateNext() {
-    const answered = questions.every((q) => trial.answers[q.id]);
+    const answered = questions.every((q) => trial.answers[q.id] !== undefined);
     const watched = trial.watched || !cfg.requireFullWatch;
-    $("next-btn").disabled = !(answered && watched) && !trial.failed;
+    $("next-btn").disabled = !trial.failed && !(answered && watched);
     let hint = "";
-    if (trial.failed) hint = "This video can't be played in your browser. Click Next to skip it.";
-    else if (!trial.plays) hint = "Press Play to watch the video.";
-    else if (!watched) hint = "Rating unlocks when the video finishes.";
-    else if (!answered) hint = questions.length > 1 ? "Answer every question to continue." : "Choose a rating to continue.";
+    if (trial.failed) hint = "A video in this round can't be played in your browser. Click Next to skip it.";
+    else if (!trial.ready) hint = "";
+    else if (!trial.plays) hint = "Press Play to watch all the videos together.";
+    else if (!watched) hint = "You can answer once the videos finish.";
+    else if (!answered) hint = questions.length > 1 ? "Answer every question to continue." : "Click the video you choose, or its letter below.";
     $("trial-hint").textContent = hint;
   }
 
-  function setOverlay(label, enabled) {
-    $("overlay").hidden = label === null;
-    if (label !== null) {
-      $("play-btn").textContent = label;
-      $("play-btn").disabled = !enabled;
-    }
+  function setPlayButton(label, enabled) {
+    $("play-btn").textContent = label;
+    $("play-btn").disabled = !enabled;
   }
 
   function nextTrial() {
-    player.removeAttribute("src");
-    player.load();
-    if (trial) releaseVideo(trial.video.id);
+    if (trial) {
+      for (const v of trial.players) { v.removeAttribute("src"); v.load(); }
+      for (const src of Object.values(trial.sample.videos)) releaseVideo(src);
+    }
     const remaining = state.order.filter((id) => !state.done.includes(id));
     if (!remaining.length) return finish();
 
-    const video = videoById.get(remaining[0]);
+    const sample = sampleById.get(remaining[0]);
+    const layout = layoutFor(sample);
     const position = state.done.length + 1;
     const total = state.order.length;
     trial = {
-      video,
+      sample,
+      layout,
       position,
+      players: renderGrid(layout),
       plays: 0,
       stalls: 0,
-      playing: false,
+      playing: layout.map(() => false),
+      ended: new Set(),
       watched: false,
       failed: false,
       ready: false,
+      locked: !!cfg.requireFullWatch,
       answers: {},
       endedAt: 0,
       shownAt: Date.now(),
     };
 
-    $("progress-text").textContent = `Video ${position} of ${total}`;
+    $("progress-text").textContent = `Round ${position} of ${total}`;
     $("progress-fill").style.width = `${((position - 1) / total) * 100}%`;
-    renderQuestions(!!cfg.requireFullWatch);
+    renderQuestions(layout.length, trial.locked);
+    if (!trial.locked && questions.length === 1) document.querySelectorAll(".tile").forEach((t) => t.classList.add("pickable"));
     $("next-btn").disabled = true;
+    setPlayButton("Loading…", false);
     show("trial");
     updateNext();
-    setOverlay("Loading…", false);
 
     const current = trial;
-    const entry = fetchVideo(video);
+    const entries = layout.map((m) => fetchVideo(sample.videos[m]));
     const ticker = setInterval(() => {
-      if (current === trial && !current.ready) setOverlay(`Loading… ${Math.round(entry.progress * 100)}%`, false);
+      if (current !== trial || current.ready) return clearInterval(ticker);
+      const p = entries.reduce((sum, e) => sum + e.progress, 0) / entries.length;
+      setPlayButton(`Loading… ${Math.round(p * 100)}%`, false);
     }, 200);
-    entry.promise.then((url) => {
+
+    Promise.all(entries.map((e) => e.promise)).then((urls) => {
       clearInterval(ticker);
       if (current !== trial) return;
-      current.url = new URL(url, location.href).href;
-      player.src = url;
-      player.load();
+      current.urls = urls.map((u) => new URL(u, location.href).href);
+      current.players.forEach((video, i) => attachEvents(current, video, i));
+      current.players.forEach((video, i) => { video.src = urls[i]; video.load(); });
+
       // Some mobile browsers won't buffer before a tap, so enable Play after a short wait regardless.
+      let canPlay = 0;
       const enable = () => {
         if (current !== trial || current.ready || current.failed) return;
         current.ready = true;
-        setOverlay("▶ Play", true);
+        setPlayButton("▶ Play", true);
+        updateNext();
       };
-      player.addEventListener("canplaythrough", enable, { once: true });
-      setTimeout(enable, 2500);
+      current.players.forEach((video) => video.addEventListener("canplaythrough", () => {
+        if (++canPlay === current.players.length) enable();
+      }, { once: true }));
+      setTimeout(enable, 3000);
 
-      const next = remaining[1] && videoById.get(remaining[1]);
-      if (next) fetchVideo(next);
+      const next = remaining[1] && sampleById.get(remaining[1]);
+      if (next) prefetchSample(next);
+    });
+  }
+
+  function attachEvents(t, video, i) {
+    video.addEventListener("playing", () => { t.playing[i] = true; });
+    video.addEventListener("waiting", () => { if (t.playing[i]) t.stalls += 1; });
+    video.addEventListener("ended", () => {
+      if (trial !== t) return;
+      t.playing[i] = false;
+      t.ended.add(i);
+      if (t.ended.size < t.players.length) return;
+      if (!t.watched) {
+        t.watched = true;
+        t.endedAt = Date.now();
+        unlock();
+      }
+      const left = maxPlays - t.plays;
+      setPlayButton(left > 0 ? `↻ Replay (${left} left)` : "No replays left", left > 0);
+      updateNext();
+    });
+    video.addEventListener("error", () => {
+      if (trial !== t || video.src !== t.urls[i]) return;
+      console.error("Video error", t.sample.videos[t.layout[i]], video.error);
+      t.failed = true;
+      setPlayButton("Video unavailable", false);
+      updateNext();
     });
   }
 
   $("play-btn").addEventListener("click", () => {
-    if (!trial || trial.plays >= maxPlays) return;
-    trial.plays += 1;
-    setOverlay(null);
-    player.currentTime = 0;
-    player.play().catch((err) => {
+    const t = trial;
+    if (!t || !t.ready || t.plays >= maxPlays) return;
+    t.plays += 1;
+    t.playing = t.players.map(() => false);
+    t.ended.clear();
+    setPlayButton("Playing…", false);
+    for (const v of t.players) { v.pause(); v.currentTime = 0; }
+    Promise.all(t.players.map((v) => v.play())).catch((err) => {
       console.warn("Playback failed:", err);
-      trial.plays -= 1;
-      setOverlay("▶ Play", true);
+      for (const v of t.players) v.pause();
+      t.plays -= 1;
+      setPlayButton("▶ Play", true);
     });
-    updateNext();
-  });
-
-  // Block the right-click menu, which would otherwise offer "Show controls" (seeking, speed).
-  player.addEventListener("contextmenu", (e) => e.preventDefault());
-  player.addEventListener("playing", () => { if (trial) trial.playing = true; });
-  player.addEventListener("waiting", () => { if (trial && trial.playing) trial.stalls += 1; });
-  player.addEventListener("ended", () => {
-    if (!trial) return;
-    trial.playing = false;
-    if (!trial.watched) {
-      trial.watched = true;
-      trial.endedAt = Date.now();
-      unlockQuestions();
-    }
-    const left = maxPlays - trial.plays;
-    if (left > 0) setOverlay(`↻ Replay (${left} left)`, true);
-    else setOverlay(null);
-    updateNext();
-  });
-  player.addEventListener("error", () => {
-    if (!trial || !trial.url || player.src !== trial.url) return;
-    console.error("Video error", trial.video.src, player.error);
-    trial.failed = true;
-    setOverlay("Video unavailable", false);
     updateNext();
   });
 
@@ -452,44 +500,46 @@
       study_id: cfg.studyId || "study",
       rater_id: state.raterId,
       session_id: state.sessionId,
-      video_id: t.video.id,
+      sample_id: t.sample.id,
+      methods_shown: t.layout.join("|"),
       trial_index: t.position,
       plays: t.plays,
       stalls: t.stalls,
-      video_seconds: Number.isFinite(player.duration) ? Math.round(player.duration * 100) / 100 : 0,
       response_ms: Date.now() - (t.endedAt || t.shownAt),
       screen: `${screen.width}x${screen.height}`,
       client_time: new Date().toISOString(),
     };
     const rows = t.failed
-      ? [{ ...base, submission_id: uuid(), question: questions[0] ? questions[0].id : "rating", score: null, note: "playback_error" }]
-      : questions.map((q) => ({ ...base, submission_id: uuid(), question: q.id, score: t.answers[q.id], note: "" }));
+      ? [{ ...base, submission_id: uuid(), question: questions[0].id, choice: "", choice_position: "", note: "playback_error" }]
+      : questions.map((q) => {
+        const i = t.answers[q.id];
+        return { ...base, submission_id: uuid(), question: q.id, choice: t.layout[i], choice_position: LETTERS[i], note: "" };
+      });
     record(rows);
-    state.done.push(t.video.id);
+    state.done.push(t.sample.id);
     saveState();
     nextTrial();
   });
 
-  // Keyboard: number keys pick a rating (single-question studies), Enter goes next.
+  // Keyboard: letter or number keys pick a video (single-question studies), Enter goes next.
   document.addEventListener("keydown", (e) => {
     if ($("screen-trial").hidden || !trial || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Enter" && !$("next-btn").disabled) {
       e.preventDefault();
       $("next-btn").click();
-    } else if (questions.length === 1 && /^[1-9]$/.test(e.key)) {
-      const input = document.getElementById(`q0-${e.key}`);
-      if (input && !input.disabled) {
-        input.checked = true;
-        input.dispatchEvent(new Event("change"));
-      }
+      return;
     }
+    if (questions.length !== 1) return;
+    let i = -1;
+    if (/^[1-9]$/.test(e.key)) i = Number(e.key) - 1;
+    else if (/^[a-z]$/i.test(e.key)) i = LETTERS.indexOf(e.key.toUpperCase());
+    if (i >= 0 && i < trial.layout.length) choose(0, i);
   });
 
   // ---------- done ----------
   function finish() {
     trial = null;
-    player.removeAttribute("src");
-    player.load();
+    $("grid").textContent = "";
     if (cfg.completionCode) {
       $("completion-code").textContent = cfg.completionCode;
       $("code-box").hidden = false;
@@ -500,8 +550,8 @@
     flush();
   }
 
-  const CSV_COLUMNS = ["study_id", "rater_id", "video_id", "question", "score", "trial_index", "plays", "stalls",
-    "video_seconds", "response_ms", "note", "screen", "session_id", "client_time", "submission_id"];
+  const CSV_COLUMNS = ["study_id", "rater_id", "sample_id", "question", "choice", "choice_position", "methods_shown",
+    "trial_index", "plays", "stalls", "response_ms", "note", "screen", "session_id", "client_time", "submission_id"];
 
   $("download-btn").addEventListener("click", () => {
     const rows = store.get(LOCAL_KEY, []).filter((r) => r.rater_id === state.raterId);
@@ -512,7 +562,7 @@
     const csv = [CSV_COLUMNS.join(",")].concat(rows.map((r) => CSV_COLUMNS.map((c) => esc(r[c])).join(","))).join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    a.download = `ratings-${state.raterId}.csv`;
+    a.download = `answers-${state.raterId}.csv`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
@@ -521,7 +571,7 @@
   if (demo) $("demo-banner").hidden = false;
 
   if (new URLSearchParams(location.search).has("reset")) {
-    // For testing: forget progress on this device (unsent ratings are kept).
+    // For testing: forget progress on this device (unsent answers are kept).
     try {
       for (const key of Object.keys(localStorage)) {
         if (key.startsWith(PREFIX) && key !== QUEUE_KEY) localStorage.removeItem(key);
@@ -529,8 +579,8 @@
     } catch { /* ignore */ }
   }
 
-  if (!videos.length) {
-    showMessage("No videos yet", "Add video files to the videos/ folder and run make_video_list.py (see README).");
+  if (!samples.length) {
+    showMessage("No videos yet", "Put each method's videos in its own folder under videos/ and run make_video_list.py (see README).");
   } else if (!questions.length) {
     showMessage("No questions configured", "Add at least one question to config.js.");
   } else {

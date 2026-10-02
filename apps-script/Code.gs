@@ -1,27 +1,31 @@
 /**
- * Video rating study — Google Sheets backend.
+ * Video comparison study — Google Sheets backend.
  *
  * Paste this whole file into Extensions → Apps Script of your Google Sheet,
  * then Deploy → New deployment → Web app (Execute as: Me, Who has access: Anyone).
  * See README.md for the full steps.
  *
  * Sheets it maintains:
- *   Ratings — one row per (rater, video, question). Never edited by the script after writing.
- *   Summary — one row per (video, question): N, MOS, SD, 95% CI, score counts. Rebuilt on every save.
+ *   Ratings — one row per (rater, round, question): which method the rater chose.
+ *             Never edited by the script after writing.
+ *   Summary — preference rate per method (with 95% CI), a position-bias check,
+ *             and vote counts per sample. Rebuilt on every save.
  */
 
 var RATINGS_SHEET = 'Ratings';
 var SUMMARY_SHEET = 'Summary';
 
 var COLUMNS = [
-  'timestamp', 'study_id', 'rater_id', 'video_id', 'question', 'score',
-  'trial_index', 'plays', 'stalls', 'video_seconds', 'response_ms', 'note',
+  'timestamp', 'study_id', 'rater_id', 'sample_id', 'question', 'choice', 'choice_position',
+  'methods_shown', 'trial_index', 'plays', 'stalls', 'response_ms', 'note',
   'screen', 'session_id', 'client_time', 'submission_id'
 ];
-// Columns stored as plain text so IDs like "007" or "1-2" aren't turned into numbers or dates.
-var TEXT_COLUMNS = ['study_id', 'rater_id', 'video_id', 'question', 'note', 'screen', 'session_id', 'client_time', 'submission_id'];
+// Columns stored as plain text so ids like "007" or "1-2" aren't turned into numbers or dates.
+var TEXT_COLUMNS = ['study_id', 'rater_id', 'sample_id', 'question', 'choice', 'choice_position',
+  'methods_shown', 'note', 'screen', 'session_id', 'client_time', 'submission_id'];
 
 var MAX_ROWS_PER_REQUEST = 100;
+var LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 // ---------- web endpoints ----------
 
@@ -104,29 +108,38 @@ function refreshSummary() {
 
 var ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 var TOKEN_RE = /^[A-Za-z0-9_-]{1,64}$/;
-var QUESTION_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-// Video ids are relative file paths. The first character must be a letter, digit or _
-// so a value can never start with "=" "+" "-" "@" and be read as a formula.
-var VIDEO_RE = /^[A-Za-z0-9_][^\u0000-\u001f\u007f]{0,199}$/;
+// Sample ids are file paths and methods are folder names. Neither may start with
+// "=" "+" "-" "@" (so a value can never be read as a formula) or contain "|".
+var SAMPLE_RE = /^[A-Za-z0-9_][^\u0000-\u001f\u007f|]{0,199}$/;
+var METHOD_RE = /^[A-Za-z0-9_][A-Za-z0-9_. -]{0,63}$/;
 
 function validate_(r) {
   if (!r || typeof r !== 'object') return 'not an object';
   if (!ID_RE.test(String(r.study_id))) return 'bad study_id';
   if (!ID_RE.test(String(r.rater_id))) return 'bad rater_id';
-  if (!VIDEO_RE.test(String(r.video_id))) return 'bad video_id';
-  if (!QUESTION_RE.test(String(r.question))) return 'bad question';
+  if (!SAMPLE_RE.test(String(r.sample_id))) return 'bad sample_id';
+  if (!ID_RE.test(String(r.question))) return 'bad question';
   if (!TOKEN_RE.test(String(r.session_id))) return 'bad session_id';
   if (!TOKEN_RE.test(String(r.submission_id))) return 'bad submission_id';
+
+  var shown = String(r.methods_shown || '').split('|');
+  if (shown.length < 2 || shown.length > LETTERS.length) return 'bad methods_shown';
+  var unique = {};
+  for (var i = 0; i < shown.length; i++) {
+    if (!METHOD_RE.test(shown[i]) || unique[shown[i]]) return 'bad methods_shown';
+    unique[shown[i]] = true;
+  }
   if (r.note === 'playback_error') {
-    if (r.score !== null && r.score !== '' && r.score !== undefined) return 'score with playback_error';
+    if (r.choice || r.choice_position) return 'choice with playback_error';
   } else {
     if (r.note) return 'bad note';
-    if (!isInt_(r.score, 1, 20)) return 'bad score';
+    var pos = shown.indexOf(String(r.choice));
+    if (pos < 0) return 'choice not among methods_shown';
+    if (r.choice_position !== LETTERS[pos]) return 'choice_position does not match choice';
   }
   if (!isInt_(r.trial_index, 1, 100000)) return 'bad trial_index';
   if (!isInt_(r.plays, 0, 1000)) return 'bad plays';
   if (!isInt_(r.stalls, 0, 100000)) return 'bad stalls';
-  if (typeof r.video_seconds !== 'number' || !(r.video_seconds >= 0 && r.video_seconds < 1e6)) return 'bad video_seconds';
   if (!isInt_(r.response_ms, 0, 1e9)) return 'bad response_ms';
   if (r.screen && !/^\d{1,5}x\d{1,5}$/.test(String(r.screen))) return 'bad screen';
   if (r.client_time && !/^[0-9T:.\-Z+]{1,40}$/.test(String(r.client_time))) return 'bad client_time';
@@ -146,74 +159,131 @@ function updateSummary_() {
   var col = {};
   header.forEach(function (h, i) { col[h] = i; });
 
-  var groups = {};
-  var order = [];
-  var maxScore = 5;
+  var methods = [];          // every method seen, in first-seen order
+  var questions = [];
+  var byMethod = {};         // q|method -> {chosen, shown, chance}
+  var byPosition = {};       // q|letter -> {chosen, shown}
+  var bySample = {};         // sample|q -> {counts{method}, n, raters{}, errors}
+  var sampleKeys = [];
+  var maxPositions = 0;
+
   data.forEach(function (row) {
-    var video = String(row[col.video_id]);
-    var question = String(row[col.question]);
-    if (!video) return;
-    var key = video + '\u0000' + question;
-    var g = groups[key];
-    if (!g) {
-      g = groups[key] = { video: video, question: question, scores: [], raters: {}, errors: 0 };
-      order.push(key);
+    var sample = String(row[col.sample_id]);
+    var q = String(row[col.question]);
+    if (!sample) return;
+    var shown = String(row[col.methods_shown]).split('|');
+    shown.forEach(function (m) { if (methods.indexOf(m) < 0) methods.push(m); });
+    if (questions.indexOf(q) < 0) questions.push(q);
+
+    var sk = sample + '\u0000' + q;
+    var s = bySample[sk];
+    if (!s) {
+      s = bySample[sk] = { sample: sample, question: q, counts: {}, n: 0, raters: {}, errors: 0 };
+      sampleKeys.push(sk);
     }
-    var score = row[col.score];
-    if (row[col.note] === 'playback_error' || score === '' || score === null) {
-      g.errors += 1;
+    if (row[col.note] === 'playback_error' || !row[col.choice]) {
+      s.errors += 1;
       return;
     }
-    score = Number(score);
-    g.scores.push(score);
-    g.raters[row[col.rater_id]] = true;
-    if (score > maxScore) maxScore = score;
+    var choice = String(row[col.choice]);
+    s.n += 1;
+    s.counts[choice] = (s.counts[choice] || 0) + 1;
+    s.raters[row[col.rater_id]] = true;
+
+    shown.forEach(function (m, i) {
+      var mk = q + '\u0000' + m;
+      var e = byMethod[mk] || (byMethod[mk] = { chosen: 0, shown: 0, chanceSum: 0 });
+      e.shown += 1;
+      e.chanceSum += 1 / shown.length;
+      if (m === choice) e.chosen += 1;
+
+      var pk = q + '\u0000' + LETTERS[i];
+      var p = byPosition[pk] || (byPosition[pk] = { chosen: 0, shown: 0 });
+      p.shown += 1;
+      if (m === choice) p.chosen += 1;
+    });
+    maxPositions = Math.max(maxPositions, shown.length);
   });
 
-  var head = ['video_id', 'question', 'n', 'MOS', 'SD', 'CI95 (±)', 'min', 'max', 'unique_raters', 'playback_errors'];
-  for (var s = 1; s <= maxScore; s++) head.push('#' + s);
+  var rows = [];
+  var bold = [];     // row indexes (0-based) of titles and headers
+  var blocks = [];   // data rows of each section: { start, count, pct: [column indexes] }
 
-  order.sort();
-  var rows = order.map(function (key) {
-    var g = groups[key];
-    var st = stats_(g.scores);
-    var r = [g.video, g.question, st.n, st.mean, st.sd, '', st.min, st.max, Object.keys(g.raters).length, g.errors];
-    for (var s = 1; s <= maxScore; s++) {
-      r.push(g.scores.filter(function (x) { return x === s; }).length);
+  function section(title, head, pctCols) {
+    if (rows.length) rows.push([]);
+    rows.push([title]);
+    bold.push(rows.length - 1);
+    rows.push(head);
+    bold.push(rows.length - 1);
+    blocks.push({ start: rows.length, count: 0, pct: pctCols });
+  }
+  function add(row) {
+    rows.push(row);
+    blocks[blocks.length - 1].count += 1;
+  }
+
+  section('Preference by method — share of rounds in which the method was chosen',
+    ['question', 'method', 'chosen', 'rounds shown', 'preference', '95% CI low', '95% CI high', 'chance level'],
+    [4, 5, 6, 7]);
+  questions.forEach(function (q) {
+    methods.forEach(function (m) {
+      var e = byMethod[q + '\u0000' + m];
+      if (!e || !e.shown) return;
+      var ci = wilson_(e.chosen, e.shown);
+      add([q, m, e.chosen, e.shown, e.chosen / e.shown, ci[0], ci[1], e.chanceSum / e.shown]);
+    });
+  });
+
+  section('Position check — should be close to chance if raters are not biased by position (A = left-most)',
+    ['question', 'position', 'chosen', 'rounds', 'share'], [4]);
+  questions.forEach(function (q) {
+    for (var i = 0; i < maxPositions; i++) {
+      var p = byPosition[q + '\u0000' + LETTERS[i]];
+      if (p) add([q, LETTERS[i], p.chosen, p.shown, p.chosen / p.shown]);
     }
-    return r;
+  });
+
+  section('Per sample — how many raters chose each method',
+    ['sample_id', 'question', 'n'].concat(methods, ['unique_raters', 'playback_errors']), []);
+  sampleKeys.sort();
+  sampleKeys.forEach(function (sk) {
+    var s = bySample[sk];
+    add([s.sample, s.question, s.n]
+      .concat(methods.map(function (m) { return s.counts[m] || 0; }))
+      .concat([Object.keys(s.raters).length, s.errors]));
+  });
+
+  var width = 1;
+  rows.forEach(function (r) { width = Math.max(width, r.length); });
+  rows = rows.map(function (r) {
+    var padded = r.slice();
+    while (padded.length < width) padded.push('');
+    return padded;
   });
 
   var sheet = ss.getSheetByName(SUMMARY_SHEET) || ss.insertSheet(SUMMARY_SHEET);
   sheet.clear();
-  if (sheet.getMaxRows() < rows.length + 1) sheet.insertRowsAfter(sheet.getMaxRows(), rows.length + 1 - sheet.getMaxRows());
-  if (sheet.getMaxColumns() < head.length) sheet.insertColumnsAfter(sheet.getMaxColumns(), head.length - sheet.getMaxColumns());
-  sheet.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
-  sheet.setFrozenRows(1);
-  if (rows.length) {
-    sheet.getRange(2, 1, rows.length, 2).setNumberFormat('@');
-    sheet.getRange(2, 1, rows.length, head.length).setValues(rows);
-    // 95% CI half-width using the t distribution: t(0.975, n-1) * SD / sqrt(n).
-    var ci = rows.map(function (_, i) {
-      var r = i + 2;
-      return ['=IF(C' + r + '>1, T.INV.2T(0.05, C' + r + '-1) * E' + r + ' / SQRT(C' + r + '), "")'];
-    });
-    sheet.getRange(2, 6, rows.length, 1).setFormulas(ci);
-    sheet.getRange(2, 4, rows.length, 3).setNumberFormat('0.000');
-  }
-  sheet.autoResizeColumns(1, head.length);
+  if (sheet.getMaxRows() < rows.length) sheet.insertRowsAfter(sheet.getMaxRows(), rows.length - sheet.getMaxRows());
+  if (sheet.getMaxColumns() < width) sheet.insertColumnsAfter(sheet.getMaxColumns(), width - sheet.getMaxColumns());
+  // The first two columns hold ids (sample, question, method): keep them as text so "001" stays "001".
+  sheet.getRange(1, 1, rows.length, 2).setNumberFormat('@');
+  blocks.forEach(function (b) {
+    if (!b.count) return;
+    b.pct.forEach(function (c) { sheet.getRange(b.start + 1, c + 1, b.count, 1).setNumberFormat('0.0%'); });
+  });
+  sheet.getRange(1, 1, rows.length, width).setValues(rows);
+  bold.forEach(function (i) { sheet.getRange(i + 1, 1, 1, width).setFontWeight('bold'); });
+  sheet.autoResizeColumns(1, width);
 }
 
-function stats_(xs) {
-  var n = xs.length;
-  if (!n) return { n: 0, mean: '', sd: '', min: '', max: '' };
-  var sum = 0, min = Infinity, max = -Infinity;
-  xs.forEach(function (x) { sum += x; if (x < min) min = x; if (x > max) max = x; });
-  var mean = sum / n;
-  var ss = 0;
-  xs.forEach(function (x) { ss += (x - mean) * (x - mean); });
-  var sd = n > 1 ? Math.sqrt(ss / (n - 1)) : '';
-  return { n: n, mean: mean, sd: sd, min: min, max: max };
+// 95% Wilson score interval for k successes out of n.
+function wilson_(k, n) {
+  var z = 1.96;
+  var p = k / n;
+  var denom = 1 + z * z / n;
+  var center = (p + z * z / (2 * n)) / denom;
+  var half = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom;
+  return [Math.max(0, center - half), Math.min(1, center + half)];
 }
 
 // ---------- helpers ----------

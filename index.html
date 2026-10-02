@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Video Rating Study</title>
+  <title>Video Comparison Study</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="demo-banner" class="banner" hidden>
-    Demo mode: no Google Sheet is connected, so ratings are saved only in this browser.
+    Demo mode: no Google Sheet is connected, so answers are saved only in this browser.
   </div>
 
   <main>
@@ -17,7 +17,6 @@
       <h1 id="study-title"></h1>
       <div id="instructions" class="prose"></div>
 
-      <div id="scale-preview" class="scale-preview"></div>
 
       <form id="start-form" novalidate>
         <label id="rater-field" class="field">
@@ -42,18 +41,15 @@
         <div class="bar"><div id="progress-fill"></div></div>
       </div>
 
-      <div class="stage">
-        <video id="player" playsinline preload="auto" disablepictureinpicture
-               controlslist="nodownload noplaybackrate nofullscreen"></video>
-        <div id="overlay" class="overlay">
-          <button id="play-btn" class="btn play" type="button" disabled>Loading…</button>
-        </div>
-      </div>
+      <div id="grid" class="grid"></div>
 
       <div class="card rating-card">
-        <div id="questions"></div>
-        <div class="row">
+        <div class="row controls">
+          <button id="play-btn" class="btn" type="button" disabled>Loading…</button>
           <span id="trial-hint" class="hint"></span>
+        </div>
+        <div id="questions"></div>
+        <div class="row end">
           <button id="next-btn" class="btn primary" type="button" disabled>Next</button>
         </div>
       </div>
@@ -62,13 +58,13 @@
     <!-- Done -->
     <section id="screen-done" class="screen card" hidden>
       <h1>Thank you!</h1>
-      <p>You have rated all the videos.</p>
+      <p>You have finished all the rounds.</p>
       <p id="save-status" class="hint"></p>
       <div id="code-box" class="code-box" hidden>
         <span>Your completion code</span>
         <strong id="completion-code"></strong>
       </div>
-      <button id="download-btn" class="btn" type="button" hidden>Download my ratings (CSV)</button>
+      <button id="download-btn" class="btn" type="button" hidden>Download my answers (CSV)</button>
     </section>
 
     <!-- Message (errors, no videos) -->
