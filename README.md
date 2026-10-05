@@ -2,7 +2,7 @@
 
 A static website for a forced-choice video user study, built for GitHub Pages.
 
-Each video already contains several versions of the same clip side by side, labeled **A, B, C**. The rater watches the video and picks the version that looks **most natural**. The rater:
+Each video already contains several versions of the same clip side by side, labeled **A, B, C**. The rater watches the video and picks the version that is **most semantically aligned with the leftmost (GT) video**. The rater:
 
 1. Enters a participant ID (or gets one from the link, e.g. `?id=P017` or `?PROLIFIC_PID=...`) and gives consent.
 2. Watches each video. The order is different for each rater.
@@ -138,7 +138,7 @@ pd.crosstab(df.video_id, df.method)          # votes per video
 |---|---|---|
 | `studyId` | `video-study-v1` | Change it for a new round; returning raters will then start fresh |
 | `choices` | `["A", "B", "C"]` | The labels inside your videos, in button order. Use `["A", "B", "C", "D"]` for 4 versions |
-| `questions` | "Which version looks the most natural?" | Add more objects to ask several things per video, e.g. `{ id: "sync", text: "Which has the best lip sync?" }` |
+| `questions` | "Which one — A, B or C — is most semantically aligned with the leftmost video?" | Add more objects to ask several things per video, e.g. `{ id: "sync", text: "Which has the best lip sync?" }` |
 | `randomizeOrder` | `true` | Each rater gets their own order of videos, which stays the same if they reload |
 | `requireFullWatch` | `true` | Answering unlocks only after the video has finished |
 | `maxPlays` | `3` | How many times a video may be played (1 = no replay) |
