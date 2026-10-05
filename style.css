@@ -38,7 +38,7 @@ body {
 }
 
 main {
-  max-width: 2080px; /* wide enough for a 2048 px video at its native size */
+  max-width: 2600px; /* wide enough for a 2560 px video at its native size */
   margin: 0 auto;
   padding: 32px 16px 64px;
 }
