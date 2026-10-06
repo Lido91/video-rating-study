@@ -6,7 +6,8 @@
   const videoById = new Map(videos.map((v) => [v.id, v]));
   const choices = (cfg.choices || ["A", "B", "C"]).map(String);
   const questions = (cfg.questions || []).filter((q) => q && q.id && q.text);
-  const maxPlays = Math.max(1, Number(cfg.maxPlays) || 1);
+  // 0 (or unset) means unlimited replays.
+  const maxPlays = Number(cfg.maxPlays) > 0 ? Math.floor(Number(cfg.maxPlays)) : Infinity;
   const demo = !cfg.scriptUrl;
 
   const RATER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -435,7 +436,8 @@
       unlock();
     }
     const left = maxPlays - t.plays;
-    setPlayButton(left > 0 ? `↻ Replay (${left} left)` : "No replays left", left > 0);
+    if (left === Infinity) setPlayButton("↻ Replay", true);
+    else setPlayButton(left > 0 ? `↻ Replay (${left} left)` : "No replays left", left > 0);
     updateNext();
   });
   player.addEventListener("error", () => {

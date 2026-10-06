@@ -141,7 +141,7 @@ pd.crosstab(df.video_id, df.method)          # votes per video
 | `questions` | "Which one — A, B or C — is most semantically aligned with the leftmost video?" | Add more objects to ask several things per video, e.g. `{ id: "sync", text: "Which has the best lip sync?" }` |
 | `randomizeOrder` | `true` | Each rater gets their own order of videos, which stays the same if they reload |
 | `requireFullWatch` | `true` | Answering unlocks only after the video has finished |
-| `maxPlays` | `3` | How many times a video may be played (1 = no replay) |
+| `maxPlays` | `0` | How many times a video may be played (0 = unlimited, 1 = no replay). The actual number is recorded in `plays` either way |
 | `askRaterId` | `true` | `false` = assign a random anonymous ID |
 | `consent` | text | `""` = no consent checkbox |
 | `completionCode` | `""` | Shown at the end, e.g. for Prolific or MTurk |

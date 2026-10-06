@@ -33,7 +33,7 @@ Please use a computer with a large screen rather than a phone. The study takes a
 
   randomizeOrder: true,     // each rater gets their own order of videos (stable across reloads)
   requireFullWatch: true,   // answering unlocks only after the video has played to the end
-  maxPlays: 3,              // how many times a rater may play each video (1 = no replay)
+  maxPlays: 0,              // how many times a rater may play each video (0 = unlimited, 1 = no replay)
 
   // Shown on the final screen (e.g. a Prolific / MTurk completion code). Leave "" to hide.
   completionCode: "",
