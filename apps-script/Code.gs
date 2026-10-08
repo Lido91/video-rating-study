@@ -13,12 +13,13 @@
  *   Mapping — filled in by you: which method is A, B, C... in each video.
  *             Use * as the video_id for an order that applies to every video not listed.
  *   Summary — preference rate per method (with 95% CI), the same split by the
- *             GROUP_BY_QUESTION background answer, a position-bias check, and per-video
- *             vote counts. Rebuilt on every save and whenever Mapping is edited.
+ *             GROUP_BY_QUESTION background answer, mean scores for rating questions
+ *             (e.g. GT Mesh fidelity, 1–5), a position-bias check, and per-video vote
+ *             counts. Rebuilt on every save and whenever Mapping is edited.
  */
 
 // Shown by doGet, so you can check which version of this file is deployed.
-var SCRIPT_VERSION = 2;
+var SCRIPT_VERSION = 3;
 
 var RATINGS_SHEET = 'Ratings';
 var PARTICIPANTS_SHEET = 'Participants';
@@ -315,12 +316,34 @@ function updateSummary_() {
   var NO_ANSWER = '(not answered)';
   var groups = [];           // answers to GROUP_BY_QUESTION seen
   var byGroup = {};          // q|group|method -> { chosen, shown, raters{} }
+  // Rating-scale questions (options are all numbers, e.g. 1|2|3|4|5): summarised by mean score.
+  var scaleQs = [];
+  var scaleScopes = {};      // q -> [scope labels in first-seen order]
+  var byScale = {};          // q|scope -> [scores]
+  var scaleBounds = {};      // q -> [lowest, highest] option, to keep the CI on the scale
 
   data.forEach(function (row) {
     var video = String(row[col.video_id]);
     var q = String(row[col.question]);
     if (!video) return;
     var options = String(row[col.options]).split('|');
+    var person = people[String(row[col.study_id]) + '\u0000' + String(row[col.rater_id])];
+    var group = (person && person[GROUP_BY_QUESTION]) || NO_ANSWER;
+
+    if (isScale_(options)) {
+      if (row[col.note] === 'playback_error' || row[col.choice] === '') return;
+      var score = Number(row[col.choice]);
+      if (scaleQs.indexOf(q) < 0) { scaleQs.push(q); scaleScopes[q] = []; }
+      var nums = options.map(Number);
+      scaleBounds[q] = [Math.min.apply(null, nums), Math.max.apply(null, nums)];
+      ['all videos', GROUP_BY_QUESTION + ' = ' + group, video].forEach(function (scope) {
+        var k = q + '\u0000' + scope;
+        if (!byScale[k]) { byScale[k] = []; scaleScopes[q].push(scope); }
+        byScale[k].push(score);
+      });
+      return;
+    }
+
     options.forEach(function (l) { if (labels.indexOf(l) < 0) labels.push(l); });
     if (questions.indexOf(q) < 0) questions.push(q);
     var mapped = methodsFor_(map, video, options);
@@ -351,8 +374,6 @@ function updateSummary_() {
     if (!mapped) { unmapped += 1; return; }
     var chosenMethod = mapped[options.indexOf(choice)];
     v.methods[chosenMethod] = (v.methods[chosenMethod] || 0) + 1;
-    var person = people[String(row[col.study_id]) + '\u0000' + String(row[col.rater_id])];
-    var group = (person && person[GROUP_BY_QUESTION]) || NO_ANSWER;
     if (groups.indexOf(group) < 0) groups.push(group);
     mapped.forEach(function (m) {
       if (methods.indexOf(m) < 0) methods.push(m);
@@ -378,13 +399,13 @@ function updateSummary_() {
   var bold = [];     // row indexes (0-based) of titles and headers
   var blocks = [];   // data rows of each section: { start, count, pct: [column indexes] }
 
-  function section(title, head, pctCols) {
+  function section(title, head, pctCols, decCols) {
     if (rows.length) rows.push([]);
     rows.push([title]);
     bold.push(rows.length - 1);
     rows.push(head);
     bold.push(rows.length - 1);
-    blocks.push({ start: rows.length, count: 0, pct: pctCols });
+    blocks.push({ start: rows.length, count: 0, pct: pctCols, dec: decCols || [] });
   }
   function add(row) {
     rows.push(row);
@@ -392,7 +413,7 @@ function updateSummary_() {
   }
   function note(text) {
     rows.push([text]);
-    blocks.push({ start: rows.length, count: 0, pct: [] });
+    blocks.push({ start: rows.length, count: 0, pct: [], dec: [] });
   }
 
   section('Preference by method — share of answers in which the method was chosen',
@@ -424,6 +445,24 @@ function updateSummary_() {
           var ci = wilson_(g.chosen, g.shown);
           add([q, grp, m, g.chosen, g.shown, g.chosen / g.shown, ci[0], ci[1], Object.keys(g.raters).length]);
         });
+      });
+    });
+  }
+
+  if (scaleQs.length) {
+    section('Rating questions — mean score (1 = lowest), for all videos, by ' + GROUP_BY_QUESTION + ', and per video',
+      ['question', 'scope', 'n', 'mean', 'SD', '95% CI low', '95% CI high'], [], [3, 4, 5, 6]);
+    scaleQs.forEach(function (q) {
+      var groupPrefix = GROUP_BY_QUESTION + ' = ';
+      var rank = function (s) { return s === 'all videos' ? 0 : s.indexOf(groupPrefix) === 0 ? 1 : 2; };
+      scaleScopes[q].slice().sort(function (a, b) {
+        return rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0);
+      }).forEach(function (scope) {
+        var st = stats_(byScale[q + '\u0000' + scope]);
+        var half = st.n > 1 ? tCrit95_(st.n - 1) * st.sd / Math.sqrt(st.n) : '';
+        var lo = scaleBounds[q][0], hi = scaleBounds[q][1];
+        add([q, scope, st.n, st.mean, st.n > 1 ? st.sd : '',
+          half === '' ? '' : Math.max(lo, st.mean - half), half === '' ? '' : Math.min(hi, st.mean + half)]);
       });
     });
   }
@@ -467,10 +506,32 @@ function updateSummary_() {
   blocks.forEach(function (b) {
     if (!b.count) return;
     b.pct.forEach(function (c) { sheet.getRange(b.start + 1, c + 1, b.count, 1).setNumberFormat('0.0%'); });
+    b.dec.forEach(function (c) { sheet.getRange(b.start + 1, c + 1, b.count, 1).setNumberFormat('0.000'); });
   });
   sheet.getRange(1, 1, rows.length, width).setValues(rows);
   bold.forEach(function (i) { sheet.getRange(i + 1, 1, 1, width).setFontWeight('bold'); });
   sheet.autoResizeColumns(1, width);
+}
+
+function isScale_(options) {
+  return options.length >= 2 && options.every(function (o) { return /^\d+$/.test(o); });
+}
+
+function stats_(xs) {
+  var n = xs.length;
+  var mean = xs.reduce(function (a, b) { return a + b; }, 0) / n;
+  var ss = xs.reduce(function (a, x) { return a + (x - mean) * (x - mean); }, 0);
+  return { n: n, mean: mean, sd: n > 1 ? Math.sqrt(ss / (n - 1)) : 0 };
+}
+
+// Two-sided 95% critical value of Student's t with df degrees of freedom.
+function tCrit95_(df) {
+  var table = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.160, 2.145,
+    2.131, 2.120, 2.110, 2.101, 2.093, 2.086, 2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042];
+  if (df <= 30) return table[df - 1];
+  if (df <= 60) return 2.042 - (df - 30) * (2.042 - 2.000) / 30;
+  if (df <= 120) return 2.000 - (df - 60) * (2.000 - 1.980) / 60;
+  return 1.96;
 }
 
 // 95% Wilson score interval for k successes out of n.

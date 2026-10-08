@@ -102,7 +102,12 @@ def main():
         if width and width > 3840:
             print(f"  warn  {rel}: {width}x{height} is wider than most screens; it will be scaled down")
 
-        entries.append({"id": rel, "src": "videos/" + quote(rel)})
+        entry = {"id": rel, "src": "videos/" + quote(rel)}
+        if width and height:
+            # Number of square panels side by side, e.g. 2560x512 → 5 (GT Video, GT Mesh, A, B, C).
+            # config.js can use it to ask a question only for some videos (see showFor).
+            entry["panels"] = round(width / height)
+        entries.append(entry)
 
     body = ",\n".join("  " + json.dumps(e, ensure_ascii=False) for e in entries)
     OUT.write_text(

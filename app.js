@@ -349,10 +349,26 @@
   }
 
   // ---------- trial ----------
+  // A question's answers: the A/B/C choices, or its own rating scale ({ value, label } options).
+  function optionsOf(q) {
+    if (!q.options) return choices.map((c) => ({ value: c, label: c, scale: false }));
+    return q.options.map((o) => (typeof o === "object"
+      ? { value: String(o.value), label: String(o.label || o.value), scale: true }
+      : { value: String(o), label: String(o), scale: true }));
+  }
+
+  // The questions asked for this video (a question with showFor only appears where it returns true).
+  function questionsFor(video) {
+    return questions.filter((q) => {
+      if (typeof q.showFor !== "function") return true;
+      try { return !!q.showFor(video); } catch (err) { console.warn(`showFor failed for ${q.id}:`, err); return false; }
+    });
+  }
+
   function renderQuestions(locked) {
     const box = $("questions");
     box.textContent = "";
-    questions.forEach((q, qi) => {
+    trial.questions.forEach((q, qi) => {
       const wrap = document.createElement("div");
       wrap.className = "question" + (locked ? " locked" : "");
       const p = document.createElement("p");
@@ -362,18 +378,27 @@
       row.className = "choices";
       row.setAttribute("role", "radiogroup");
       row.setAttribute("aria-labelledby", p.id);
-      row.style.setProperty("--n", choices.length);
-      choices.forEach((label, i) => {
+      const opts = optionsOf(q);
+      row.style.setProperty("--n", opts.length);
+      opts.forEach((opt, i) => {
         const input = document.createElement("input");
         input.type = "radio";
         input.name = `q${qi}`;
         input.id = `q${qi}-${i}`;
-        input.value = label;
+        input.value = opt.value;
         input.disabled = locked;
         input.addEventListener("change", () => choose(qi, i));
         const lab = document.createElement("label");
         lab.htmlFor = input.id;
-        lab.textContent = label;
+        if (opt.scale && opt.label !== opt.value) {
+          const num = document.createElement("strong");
+          num.textContent = opt.value;
+          const text = document.createElement("small");
+          text.textContent = opt.label;
+          lab.append(num, text);
+        } else {
+          lab.textContent = opt.label;
+        }
         row.append(input, lab);
       });
       wrap.append(p, row);
@@ -386,7 +411,8 @@
     const input = document.getElementById(`q${qi}-${i}`);
     if (!input || input.disabled) return;
     input.checked = true;
-    trial.answers[questions[qi].id] = choices[i];
+    const q = trial.questions[qi];
+    trial.answers[q.id] = optionsOf(q)[i].value;
     updateNext();
   }
 
@@ -397,7 +423,7 @@
   }
 
   function updateNext() {
-    const answered = questions.every((q) => trial.answers[q.id] !== undefined);
+    const answered = trial.questions.every((q) => trial.answers[q.id] !== undefined);
     const watched = trial.watched || !cfg.requireFullWatch;
     $("next-btn").disabled = !trial.failed && !(answered && watched);
     let hint = "";
@@ -405,7 +431,12 @@
     else if (!trial.ready) hint = "";
     else if (!trial.plays) hint = "Press Play to watch the video.";
     else if (!watched) hint = "You can answer once the video finishes.";
-    else if (!answered) hint = questions.length > 1 ? "Answer every question to continue." : `Choose ${choices.slice(0, -1).join(", ")} or ${choices[choices.length - 1]} to continue.`;
+    else if (!answered) {
+      const only = trial.questions.length === 1 ? trial.questions[0] : null;
+      if (!only) hint = "Answer every question to continue.";
+      else if (only.options) hint = "Choose a rating to continue.";
+      else hint = `Choose ${choices.slice(0, -1).join(", ")} or ${choices[choices.length - 1]} to continue.`;
+    }
     $("trial-hint").textContent = hint;
   }
 
@@ -427,6 +458,7 @@
     trial = {
       video,
       position,
+      questions: questionsFor(video),
       plays: 0,
       stalls: 0,
       playing: false,
@@ -483,8 +515,12 @@
     t.inPlay = true;
     setPlayButton("Playing…", false);
     player.currentTime = 0;
+    const attempt = (t.playAttempt = (t.playAttempt || 0) + 1);
     player.play().catch((err) => {
       console.warn("Playback failed:", err);
+      // The pause handler may already have refunded this play (play() interrupted by a pause),
+      // and a later click starts a new attempt that this failure must not refund.
+      if (!t.inPlay || t.playAttempt !== attempt) return;
       t.inPlay = false;
       t.plays -= 1;
       setPlayButton("▶ Play", true);
@@ -539,25 +575,30 @@
       rater_id: state.raterId,
       session_id: state.sessionId,
       video_id: t.video.id,
-      options: choices.join("|"),
       trial_index: t.position,
-      plays: t.plays,
+      plays: Math.max(0, t.plays),
       stalls: t.stalls,
       video_seconds: Number.isFinite(player.duration) ? Math.round(player.duration * 100) / 100 : 0,
       response_ms: Date.now() - (t.endedAt || t.shownAt),
       screen: `${screen.width}x${screen.height}`,
       client_time: new Date().toISOString(),
     };
-    const rows = t.failed
-      ? [{ ...base, submission_id: uuid(), question: questions[0].id, choice: "", note: "playback_error" }]
-      : questions.map((q) => ({ ...base, submission_id: uuid(), question: q.id, choice: t.answers[q.id], note: "" }));
+    const optionList = (q) => optionsOf(q).map((o) => o.value).join("|");
+    const first = t.questions[0];
+    const rows = !first ? []
+      : t.failed
+      ? [{ ...base, submission_id: uuid(), question: first.id, options: optionList(first), choice: "", note: "playback_error" }]
+      : t.questions.map((q) => ({
+        ...base, submission_id: uuid(), question: q.id, options: optionList(q), choice: t.answers[q.id], note: "",
+      }));
     record(rows);
     state.done.push(t.video.id);
     saveState();
     nextTrial();
   });
 
-  // Keyboard: a choice's letter (or 1, 2, 3…) picks it in single-question studies; Enter goes next.
+  // Keyboard: a letter (A, B, C) answers the A/B/C question; a digit answers the rating question
+  // (or picks the 1st, 2nd, 3rd choice when there is no rating question); Enter goes next.
   document.addEventListener("keydown", (e) => {
     if ($("screen-trial").hidden || !trial || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Enter" && !$("next-btn").disabled) {
@@ -565,10 +606,20 @@
       $("next-btn").click();
       return;
     }
-    if (questions.length !== 1) return;
-    let i = choices.findIndex((c) => c.toLowerCase() === e.key.toLowerCase());
-    if (i < 0 && /^[1-9]$/.test(e.key)) i = Number(e.key) - 1;
-    if (i >= 0 && i < choices.length) choose(0, i);
+    const choiceQ = trial.questions.findIndex((q) => !q.options);
+    const scaleQ = trial.questions.findIndex((q) => q.options);
+    const key = e.key.toLowerCase();
+    if (choiceQ >= 0) {
+      const i = choices.findIndex((c) => c.toLowerCase() === key);
+      if (i >= 0) return choose(choiceQ, i);
+    }
+    if (!/^[0-9]$/.test(key)) return;
+    if (scaleQ >= 0) {
+      const i = optionsOf(trial.questions[scaleQ]).findIndex((o) => o.value === key);
+      if (i >= 0) choose(scaleQ, i);
+    } else if (choiceQ >= 0 && Number(key) >= 1 && Number(key) <= choices.length) {
+      choose(choiceQ, Number(key) - 1);
+    }
   });
 
   // ---------- done ----------

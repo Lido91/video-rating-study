@@ -156,6 +156,8 @@ h1 { font-size: 26px; line-height: 1.25; margin: 0 0 16px; }
 .choices input { position: absolute; opacity: 0; pointer-events: none; }
 .choices input:checked + label { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .choices input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 2px; }
+.choices label:has(small) { flex-direction: column; gap: 2px; padding: 8px 4px; }
+.choices label small { font-size: 12px; font-weight: 500; color: var(--muted); }
 
 .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 22px; }
 .row.end { justify-content: flex-end; }
