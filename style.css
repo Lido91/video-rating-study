@@ -58,7 +58,7 @@ main {
   padding: 28px;
 }
 
-#screen-welcome, #screen-done, #screen-message { max-width: 640px; margin: 0 auto; }
+#screen-welcome, #screen-survey, #screen-done, #screen-message { max-width: 640px; margin: 0 auto; }
 
 h1 { font-size: 26px; line-height: 1.25; margin: 0 0 16px; }
 .prose p { margin: 0 0 12px; }
@@ -83,6 +83,23 @@ h1 { font-size: 26px; line-height: 1.25; margin: 0 0 16px; }
 
 .check { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0; cursor: pointer; }
 .check input { margin-top: 5px; width: 18px; height: 18px; flex: none; }
+
+/* Background questions */
+.survey-q { border: 0; padding: 0; margin: 20px 0 8px; min-width: 0; }
+.survey-q legend { font-weight: 600; padding: 0; margin-bottom: 10px; }
+.survey-q label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.survey-q label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.survey-q input[type="radio"] { margin-top: 4px; flex: none; }
+.survey-q input[type="text"] { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
 
 /* Buttons */
 .btn {

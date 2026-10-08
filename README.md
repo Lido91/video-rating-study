@@ -4,9 +4,10 @@ A static website for a forced-choice video user study, built for GitHub Pages.
 
 Each video already contains several versions of the same clip side by side, labeled **A, B, C**. The rater watches the video and picks the version that is **most semantically aligned with the leftmost (GT) video**. The rater:
 
-1. Enters a participant ID (or gets one from the link, e.g. `?id=P017` or `?PROLIFIC_PID=...`) and gives consent.
-2. Watches each video. The order is different for each rater.
-3. Picks A, B or C once the video has finished, by clicking a button or pressing A/B/C or 1/2/3.
+1. Enters a participant ID (or gets one from the link, e.g. `?id=OU_01` or `?PROLIFIC_PID=...`) and gives consent.
+2. Answers a short background questionnaire, e.g. ASL proficiency (asked once; set in `config.js` → `survey`).
+3. Watches each video. The order is different for each rater.
+4. Picks A, B or C once the video has finished, by clicking a button or pressing A/B/C or 1/2/3.
 
 Answers go straight into a Google Sheet that only you can see. The Sheet also holds the **mapping** (which method is A, B, C in each video), so the site and the public repo never reveal it.
 
@@ -47,7 +48,7 @@ Each video's ID in the results is its path inside `videos/`, e.g. `set1/clip01.m
 
 1. Create a new Google Sheet, e.g. "Video study results".
 2. Open **Extensions → Apps Script**. Delete the sample code, paste in all of `apps-script/Code.gs`, and save.
-3. Choose `setup` in the function dropdown and click **Run**. Approve the permissions prompt. This creates the **Ratings**, **Mapping** and **Summary** tabs.
+3. Choose `setup` in the function dropdown and click **Run**. Approve the permissions prompt. This creates the **Ratings**, **Participants**, **Mapping** and **Summary** tabs.
 4. Click **Deploy → New deployment**. Under the gear icon choose **Web app**, then set:
    - Execute as: **Me**
    - Who has access: **Anyone**
@@ -114,11 +115,14 @@ The site updates about a minute later. Send each rater their own link: `https://
 | `note` | `playback_error` if the video couldn't play on their device (choice left blank) |
 | `screen` | screen resolution in CSS pixels |
 
-**Summary** tab: rebuilt every time an answer arrives or the Mapping tab changes. You can also use **Video ratings → Refresh summary** in the Sheet menu. Don't edit it by hand, because your changes will be overwritten. It has three tables:
+**Participants** tab: one row per rater with their background answers (`asl_level` and any other `survey` question, one column each). If a rater answers again on another device, the latest row counts.
+
+**Summary** tab: rebuilt every time an answer arrives or the Mapping tab changes. You can also use **Video ratings → Refresh summary** in the Sheet menu. Don't edit it by hand, because your changes will be overwritten. It has four tables:
 
 1. **Preference by method** (needs the Mapping tab): how often each method was chosen, its preference rate, a 95% confidence interval (Wilson), and the chance level (33.3% with 3 choices). If the CI's lower bound is above chance, raters preferred that method more often than chance.
-2. **Position check**: how often A, B and C were chosen. This should be close to chance unless one position always holds the best method.
-3. **Per video**: for each video, how many raters picked A, B and C, the mapping, and the votes per method.
+2. **Split by `asl_level`**: the same table for each proficiency level, from the Participants tab. To split by a different background question, change `GROUP_BY_QUESTION` at the top of `Code.gs` (and redeploy).
+3. **Position check**: how often A, B and C were chosen. This should be close to chance unless one position always holds the best method.
+4. **Per video**: for each video, how many raters picked A, B and C, the mapping, and the votes per method.
 
 To analyze in Python, download the Ratings and Mapping tabs with **File → Download → CSV**, then run the code below. It assumes the Mapping tab has one row per video, using the full file name.
 
@@ -137,6 +141,7 @@ pd.crosstab(df.video_id, df.method)          # votes per video
 | setting | default | |
 |---|---|---|
 | `studyId` | `video-study-v1` | Change it for a new round; returning raters will then start fresh |
+| `survey` | ASL proficiency (1–5) | Background questions asked once before the videos. Each has an `id`, `text` and `options` (`{ value, label }`; raters see the label, the Sheet stores the value). Leave out `options` for a free-text answer; add `optional: true` to allow skipping. `[]` = no questionnaire |
 | `choices` | `["A", "B", "C"]` | The labels inside your videos, in button order. Use `["A", "B", "C", "D"]` for 4 versions |
 | `questions` | "Which one — A, B or C — is most semantically aligned with the leftmost video?" | Add more objects to ask several things per video, e.g. `{ id: "sync", text: "Which has the best lip sync?" }` |
 | `randomizeOrder` | `true` | Each rater gets their own order of videos, which stays the same if they reload |

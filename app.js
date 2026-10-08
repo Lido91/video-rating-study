@@ -6,6 +6,7 @@
   const videoById = new Map(videos.map((v) => [v.id, v]));
   const choices = (cfg.choices || ["A", "B", "C"]).map(String);
   const questions = (cfg.questions || []).filter((q) => q && q.id && q.text);
+  const survey = (cfg.survey || []).filter((q) => q && q.id && q.text);
   // 0 (or unset) means unlimited replays.
   const maxPlays = Number(cfg.maxPlays) > 0 ? Math.floor(Number(cfg.maxPlays)) : Infinity;
   const demo = !cfg.scriptUrl;
@@ -110,17 +111,31 @@
     flushing = true;
     clearTimeout(retryTimer);
     try {
-      while (queue.length) {
-        const batch = queue.slice(0, 50);
+      const attempted = new Set();
+      for (;;) {
+        const batch = queue.filter((r) => !attempted.has(r.submission_id)).slice(0, 50);
+        if (!batch.length) break;
+        batch.forEach((r) => attempted.add(r.submission_id));
+        const rows = batch.filter((r) => r.kind !== "participant");
+        const participants = batch.filter((r) => r.kind === "participant");
         // No custom headers: a text/plain POST avoids a CORS preflight, which Apps Script can't answer.
-        const res = await fetch(cfg.scriptUrl, { method: "POST", body: JSON.stringify({ rows: batch }) });
+        const res = await fetch(cfg.scriptUrl, { method: "POST", body: JSON.stringify({ rows, participants }) });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || "Save failed");
         if (data.rejected) console.warn(`${data.rejected} row(s) were rejected by the sheet`, data.errors);
-        const sent = new Set(batch.map((r) => r.submission_id));
-        queue = queue.filter((r) => !sent.has(r.submission_id));
+        const saved = new Set(rows.map((r) => r.submission_id));
+        if (participants.length) {
+          // An older deployment of the script ignores background answers; keep them queued until it is updated.
+          if (data.participants_saved === undefined) {
+            console.warn("The Google Sheet script is out of date: redeploy apps-script/Code.gs (see README) to save background answers.");
+          } else {
+            participants.forEach((p) => saved.add(p.submission_id));
+          }
+        }
+        queue = queue.filter((r) => !saved.has(r.submission_id));
         store.set(QUEUE_KEY, queue);
       }
+      if (queue.length) throw new Error("Some answers are still waiting to be saved");
       retryDelay = 2000;
     } catch (err) {
       console.warn("Could not save answers yet, will retry:", err);
@@ -257,7 +272,74 @@
       sessionId: saved ? saved.sessionId : uuid(),
       order: buildOrder(raterId, saved && saved.order),
       done: saved ? saved.done.filter((id) => videoById.has(id)) : [],
+      surveyAnswers: (saved && saved.surveyAnswers) || null,
     };
+    saveState();
+    if (survey.length && !state.surveyAnswers) showSurvey();
+    else nextTrial();
+  });
+
+  // ---------- background questions ----------
+  function showSurvey() {
+    const box = $("survey-questions");
+    box.textContent = "";
+    survey.forEach((q, qi) => {
+      const set = document.createElement("fieldset");
+      set.className = "survey-q";
+      const legend = document.createElement("legend");
+      legend.textContent = q.text;
+      set.append(legend);
+      if (q.options && q.options.length) {
+        q.options.forEach((opt, oi) => {
+          const value = typeof opt === "object" ? String(opt.value) : String(opt);
+          const label = document.createElement("label");
+          const input = document.createElement("input");
+          input.type = "radio";
+          input.name = `s${qi}`;
+          input.value = value;
+          input.id = `s${qi}-${oi}`;
+          const text = document.createElement("span");
+          text.textContent = typeof opt === "object" ? String(opt.label || opt.value) : String(opt);
+          label.append(input, text);
+          set.append(label);
+        });
+      } else {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.name = `s${qi}`;
+        input.maxLength = 500;
+        input.setAttribute("aria-label", q.text);
+        set.append(input);
+      }
+      box.append(set);
+    });
+    $("survey-error").textContent = "";
+    show("survey");
+  }
+
+  $("survey-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const answers = {};
+    for (let qi = 0; qi < survey.length; qi++) {
+      const q = survey[qi];
+      const field = $("survey-form").elements[`s${qi}`];
+      const value = field ? String(field.value || "").trim() : "";
+      if (!value && !q.optional) {
+        $("survey-error").textContent = "Please answer every question to continue.";
+        return;
+      }
+      answers[q.id] = value;
+    }
+    record([{
+      kind: "participant",
+      study_id: cfg.studyId || "study",
+      rater_id: state.raterId,
+      session_id: state.sessionId,
+      submission_id: uuid(),
+      client_time: new Date().toISOString(),
+      answers,
+    }]);
+    state.surveyAnswers = answers;
     saveState();
     nextTrial();
   });
@@ -506,12 +588,16 @@
     "stalls", "video_seconds", "response_ms", "note", "screen", "session_id", "client_time", "submission_id"];
 
   $("download-btn").addEventListener("click", () => {
-    const rows = store.get(LOCAL_KEY, []).filter((r) => r.rater_id === state.raterId);
+    const rows = store.get(LOCAL_KEY, []).filter((r) => r.rater_id === state.raterId && r.kind !== "participant");
+    const background = state.surveyAnswers || {};
+    const columns = CSV_COLUMNS.concat(survey.map((q) => q.id));
     const esc = (v) => {
       const s = v === null || v === undefined ? "" : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const csv = [CSV_COLUMNS.join(",")].concat(rows.map((r) => CSV_COLUMNS.map((c) => esc(r[c])).join(","))).join("\n");
+    const csv = [columns.join(",")]
+      .concat(rows.map((r) => columns.map((c) => esc(c in r ? r[c] : background[c])).join(",")))
+      .join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     a.download = `answers-${state.raterId}.csv`;

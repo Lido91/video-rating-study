@@ -8,15 +8,26 @@
  * Sheets:
  *   Ratings — one row per (rater, video, question): which version (A, B, C...) was chosen.
  *             Written by the script, never edited after writing.
+ *   Participants — one row per rater: their answers to the background questions
+ *             (config.js → survey), e.g. ASL proficiency.
  *   Mapping — filled in by you: which method is A, B, C... in each video.
  *             Use * as the video_id for an order that applies to every video not listed.
- *   Summary — preference rate per method (with 95% CI), a position-bias check,
- *             and per-video vote counts. Rebuilt on every save and whenever Mapping is edited.
+ *   Summary — preference rate per method (with 95% CI), the same split by the
+ *             GROUP_BY_QUESTION background answer, a position-bias check, and per-video
+ *             vote counts. Rebuilt on every save and whenever Mapping is edited.
  */
 
+// Shown by doGet, so you can check which version of this file is deployed.
+var SCRIPT_VERSION = 2;
+
 var RATINGS_SHEET = 'Ratings';
+var PARTICIPANTS_SHEET = 'Participants';
 var MAPPING_SHEET = 'Mapping';
 var SUMMARY_SHEET = 'Summary';
+
+// The background question (its id in config.js → survey) used to split the Summary.
+var GROUP_BY_QUESTION = 'asl_level';
+var PARTICIPANT_COLUMNS = ['timestamp', 'study_id', 'rater_id', 'session_id', 'client_time', 'submission_id'];
 
 var COLUMNS = [
   'timestamp', 'study_id', 'rater_id', 'video_id', 'question', 'choice', 'options',
@@ -73,9 +84,12 @@ function doPost(e) {
         sheet.getRange(start, COLUMNS.indexOf(c) + 1, out.length, 1).setNumberFormat('@');
       });
       sheet.getRange(start, 1, out.length, COLUMNS.length).setValues(out);
-      updateSummary_();
     }
-    return json_({ ok: true, saved: out.length, rejected: errors.length, errors: errors.slice(0, 5) });
+    var people = Array.isArray(body.participants) ? body.participants.slice(0, MAX_ROWS_PER_REQUEST) : [];
+    var peopleSaved = saveParticipants_(people, now, errors);
+    if (out.length || peopleSaved) updateSummary_();
+    return json_({ ok: true, saved: out.length, participants_saved: peopleSaved,
+      rejected: errors.length, errors: errors.slice(0, 5) });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   } finally {
@@ -85,7 +99,7 @@ function doPost(e) {
 
 // Open the web app URL in a browser to check the deployment works.
 function doGet() {
-  return json_({ ok: true, message: 'Video rating endpoint is running.' });
+  return json_({ ok: true, message: 'Video rating endpoint is running.', version: SCRIPT_VERSION });
 }
 
 function onOpen() {
@@ -104,6 +118,7 @@ function onEdit(e) {
 // and grant the script permission to edit this spreadsheet.
 function setup() {
   ratingsSheet_();
+  participantsSheet_();
   mappingSheet_();
   updateSummary_();
 }
@@ -155,6 +170,93 @@ function validate_(r) {
 
 function isInt_(v, min, max) {
   return typeof v === 'number' && Math.floor(v) === v && v >= min && v <= max;
+}
+
+function validateParticipant_(p) {
+  if (!p || typeof p !== 'object') return 'not an object';
+  if (!ID_RE.test(String(p.study_id))) return 'bad study_id';
+  if (!ID_RE.test(String(p.rater_id))) return 'bad rater_id';
+  if (!TOKEN_RE.test(String(p.session_id))) return 'bad session_id';
+  if (!TOKEN_RE.test(String(p.submission_id))) return 'bad submission_id';
+  if (p.client_time && !/^[0-9T:.\-Z+]{1,40}$/.test(String(p.client_time))) return 'bad client_time';
+  if (!p.answers || typeof p.answers !== 'object' || Array.isArray(p.answers)) return 'bad answers';
+  var keys = Object.keys(p.answers);
+  if (keys.length > 30) return 'too many answers';
+  for (var i = 0; i < keys.length; i++) {
+    if (!ID_RE.test(keys[i]) || PARTICIPANT_COLUMNS.indexOf(keys[i]) >= 0) return 'bad question id ' + keys[i];
+    var v = p.answers[keys[i]];
+    if (typeof v !== 'string' && typeof v !== 'number') return 'bad answer to ' + keys[i];
+    if (String(v).length > 500) return 'answer too long';
+  }
+  return '';
+}
+
+// Free-text answers: a leading = + - @ would make Sheets read the text as a formula.
+function safeText_(v) {
+  var s = String(v);
+  return /^[=+\-@]/.test(s) ? "'" + s : s;
+}
+
+// ---------- participants ----------
+
+// Appends background answers; a new question id gets its own column. Returns rows written.
+function saveParticipants_(people, now, errors) {
+  if (!people.length) return 0;
+  var sheet = participantsSheet_();
+  var header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  var lastRow = sheet.getLastRow();
+  var seen = {};
+  if (lastRow > 1) {
+    sheet.getRange(2, header.indexOf('submission_id') + 1, lastRow - 1, 1).getValues()
+      .forEach(function (r) { seen[r[0]] = true; });
+  }
+  var fresh = [];
+  people.forEach(function (p, i) {
+    var problem = validateParticipant_(p);
+    if (problem) { errors.push('participant ' + i + ': ' + problem); return; }
+    if (seen[p.submission_id]) return; // already saved (client retried)
+    seen[p.submission_id] = true;
+    Object.keys(p.answers).forEach(function (k) { if (header.indexOf(k) < 0) header.push(k); });
+    fresh.push(p);
+  });
+  if (!fresh.length) return 0;
+
+  if (sheet.getMaxColumns() < header.length) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), header.length - sheet.getMaxColumns());
+  }
+  sheet.getRange(1, 1, 1, header.length).setValues([header]).setFontWeight('bold');
+  var rows = fresh.map(function (p) {
+    return header.map(function (h) {
+      if (h === 'timestamp') return now;
+      if (PARTICIPANT_COLUMNS.indexOf(h) >= 0) return p[h] === undefined ? '' : String(p[h]);
+      var v = p.answers[h];
+      return v === undefined || v === null ? '' : safeText_(v);
+    });
+  });
+  var start = sheet.getLastRow() + 1;
+  var needed = start + rows.length - 1 - sheet.getMaxRows();
+  if (needed > 0) sheet.insertRowsAfter(sheet.getMaxRows(), needed + 100);
+  // study_id … submission_id (columns B–F) as plain text so ids aren't turned into numbers.
+  sheet.getRange(start, 2, rows.length, PARTICIPANT_COLUMNS.length - 1).setNumberFormat('@');
+  sheet.getRange(start, 1, rows.length, header.length).setValues(rows);
+  return fresh.length;
+}
+
+// Returns { study_id + '\u0000' + rater_id: { question id: answer } }; a rater's latest row wins.
+function readParticipants_() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(PARTICIPANTS_SHEET);
+  if (!sheet || sheet.getLastRow() < 2) return {};
+  var values = sheet.getDataRange().getValues();
+  var head = values.shift().map(String);
+  var iStudy = head.indexOf('study_id');
+  var iRater = head.indexOf('rater_id');
+  var map = {};
+  values.forEach(function (row) {
+    var answers = {};
+    head.forEach(function (h, j) { answers[h] = String(row[j]); });
+    map[String(row[iStudy]) + '\u0000' + String(row[iRater])] = answers;
+  });
+  return map;
 }
 
 // ---------- mapping ----------
@@ -209,6 +311,10 @@ function updateSummary_() {
   var byVideo = {};          // video|q  -> { labels{}, methods{}, n, raters{}, errors, mapping }
   var videoKeys = [];
   var unmapped = 0;
+  var people = readParticipants_();
+  var NO_ANSWER = '(not answered)';
+  var groups = [];           // answers to GROUP_BY_QUESTION seen
+  var byGroup = {};          // q|group|method -> { chosen, shown, raters{} }
 
   data.forEach(function (row) {
     var video = String(row[col.video_id]);
@@ -245,6 +351,9 @@ function updateSummary_() {
     if (!mapped) { unmapped += 1; return; }
     var chosenMethod = mapped[options.indexOf(choice)];
     v.methods[chosenMethod] = (v.methods[chosenMethod] || 0) + 1;
+    var person = people[String(row[col.study_id]) + '\u0000' + String(row[col.rater_id])];
+    var group = (person && person[GROUP_BY_QUESTION]) || NO_ANSWER;
+    if (groups.indexOf(group) < 0) groups.push(group);
     mapped.forEach(function (m) {
       if (methods.indexOf(m) < 0) methods.push(m);
       var mk = q + '\u0000' + m;
@@ -252,7 +361,17 @@ function updateSummary_() {
       e.shown += 1;
       e.chanceSum += 1 / options.length;
       if (m === chosenMethod) e.chosen += 1;
+
+      var gk = q + '\u0000' + group + '\u0000' + m;
+      var g = byGroup[gk] || (byGroup[gk] = { chosen: 0, shown: 0, raters: {} });
+      g.shown += 1;
+      g.raters[row[col.rater_id]] = true;
+      if (m === chosenMethod) g.chosen += 1;
     });
+  });
+  groups.sort(function (a, b) {
+    if (a === NO_ANSWER || b === NO_ANSWER) return a === NO_ANSWER ? 1 : -1;
+    return a < b ? -1 : a > b ? 1 : 0;
   });
 
   var rows = [];
@@ -291,6 +410,22 @@ function updateSummary_() {
     note('Fill in the Mapping tab (which method is A, B, C in each video) to see results per method.');
   } else if (unmapped) {
     note(unmapped + ' answer(s) are for videos missing from the Mapping tab and are not counted in this table.');
+  }
+
+  if (groups.some(function (g) { return g !== NO_ANSWER; })) {
+    section('Preference by method, split by ' + GROUP_BY_QUESTION + ' (from the Participants tab)',
+      ['question', GROUP_BY_QUESTION, 'method', 'chosen', 'answers', 'preference', '95% CI low', '95% CI high', 'raters'],
+      [5, 6, 7]);
+    questions.forEach(function (q) {
+      groups.forEach(function (grp) {
+        methods.forEach(function (m) {
+          var g = byGroup[q + '\u0000' + grp + '\u0000' + m];
+          if (!g || !g.shown) return;
+          var ci = wilson_(g.chosen, g.shown);
+          add([q, grp, m, g.chosen, g.shown, g.chosen / g.shown, ci[0], ci[1], Object.keys(g.raters).length]);
+        });
+      });
+    });
   }
 
   section('Position check — should be close to chance if raters are not biased by position',
@@ -356,6 +491,17 @@ function ratingsSheet_() {
   if (!sheet) {
     sheet = ss.insertSheet(RATINGS_SHEET, 0);
     sheet.getRange(1, 1, 1, COLUMNS.length).setValues([COLUMNS]).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function participantsSheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(PARTICIPANTS_SHEET);
+  if (!sheet) {
+    sheet = ss.insertSheet(PARTICIPANTS_SHEET, 1);
+    sheet.getRange(1, 1, 1, PARTICIPANT_COLUMNS.length).setValues([PARTICIPANT_COLUMNS]).setFontWeight('bold');
     sheet.setFrozenRows(1);
   }
   return sheet;

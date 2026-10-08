@@ -23,6 +23,24 @@ Please use a computer with a large screen rather than a phone. The study takes a
   // If false, a random anonymous ID is generated.
   askRaterId: true,
 
+  // Background questions asked once, after consent and before the first video.
+  // Answers go to the Participants tab of the Sheet (one row per rater).
+  // Each option is { value, label }: raters see the label, the Sheet stores the value.
+  // Leave the list empty to skip this page.
+  survey: [
+    {
+      id: "asl_level",
+      text: "How would you rate your ASL proficiency?",
+      options: [
+        { value: "1 None", label: "1 – No knowledge of ASL" },
+        { value: "2 Beginner", label: "2 – Beginner: I know some signs or basic phrases" },
+        { value: "3 Intermediate", label: "3 – Intermediate: I can hold simple conversations" },
+        { value: "4 Advanced", label: "4 – Advanced: I can follow most conversations comfortably" },
+        { value: "5 Native/fluent", label: "5 – Native or fluent: ASL is my first language, or I use it fluently every day" },
+      ],
+    },
+  ],
+
   // The labels of the versions inside each video, in the order the buttons should appear.
   choices: ["A", "B", "C"],
 
