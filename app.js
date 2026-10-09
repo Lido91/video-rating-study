@@ -275,13 +275,16 @@
       surveyAnswers: (saved && saved.surveyAnswers) || null,
     };
     saveState();
-    if (survey.length && !state.surveyAnswers) showSurvey();
+    // Ask again if questions were added since this rater last answered.
+    const unanswered = survey.some((q) => !state.surveyAnswers || !(q.id in state.surveyAnswers));
+    if (unanswered) showSurvey();
     else nextTrial();
   });
 
   // ---------- background questions ----------
   function showSurvey() {
     const box = $("survey-questions");
+    const previous = state.surveyAnswers || {};
     box.textContent = "";
     survey.forEach((q, qi) => {
       const set = document.createElement("fieldset");
@@ -298,6 +301,7 @@
           input.name = `s${qi}`;
           input.value = value;
           input.id = `s${qi}-${oi}`;
+          input.checked = previous[q.id] === value;
           const text = document.createElement("span");
           text.textContent = typeof opt === "object" ? String(opt.label || opt.value) : String(opt);
           label.append(input, text);
@@ -308,6 +312,7 @@
         input.type = "text";
         input.name = `s${qi}`;
         input.maxLength = 500;
+        input.value = previous[q.id] || "";
         input.setAttribute("aria-label", q.text);
         set.append(input);
       }

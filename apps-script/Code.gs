@@ -13,21 +13,22 @@
  *   Mapping — filled in by you: which method is A, B, C... in each video.
  *             Use * as the video_id for an order that applies to every video not listed.
  *   Summary — preference rate per method (with 95% CI), the same split by the
- *             GROUP_BY_QUESTION background answer, mean scores for rating questions
+ *             GROUP_BY_QUESTIONS background answers, mean scores for rating questions
  *             (e.g. GT Mesh fidelity, 1–5), a position-bias check, and per-video vote
  *             counts. Rebuilt on every save and whenever Mapping is edited.
  */
 
 // Shown by doGet, so you can check which version of this file is deployed.
-var SCRIPT_VERSION = 3;
+var SCRIPT_VERSION = 4;
 
 var RATINGS_SHEET = 'Ratings';
 var PARTICIPANTS_SHEET = 'Participants';
 var MAPPING_SHEET = 'Mapping';
 var SUMMARY_SHEET = 'Summary';
 
-// The background question (its id in config.js → survey) used to split the Summary.
-var GROUP_BY_QUESTION = 'asl_level';
+// Background questions (their ids in config.js → survey) used to split the Summary,
+// e.g. Deaf vs hearing raters, or native vs late signers. One table per question.
+var GROUP_BY_QUESTIONS = ['hearing_status', 'asl_level', 'asl_age_learned'];
 var PARTICIPANT_COLUMNS = ['timestamp', 'study_id', 'rater_id', 'session_id', 'client_time', 'submission_id'];
 
 var COLUMNS = [
@@ -314,8 +315,9 @@ function updateSummary_() {
   var unmapped = 0;
   var people = readParticipants_();
   var NO_ANSWER = '(not answered)';
-  var groups = [];           // answers to GROUP_BY_QUESTION seen
-  var byGroup = {};          // q|group|method -> { chosen, shown, raters{} }
+  var groupsBy = {};         // background question -> [answers seen]
+  var byGroup = {};          // background question|q|answer|method -> { chosen, shown, raters{} }
+  GROUP_BY_QUESTIONS.forEach(function (gq) { groupsBy[gq] = []; });
   // Rating-scale questions (options are all numbers, e.g. 1|2|3|4|5): summarised by mean score.
   var scaleQs = [];
   var scaleScopes = {};      // q -> [scope labels in first-seen order]
@@ -328,7 +330,7 @@ function updateSummary_() {
     if (!video) return;
     var options = String(row[col.options]).split('|');
     var person = people[String(row[col.study_id]) + '\u0000' + String(row[col.rater_id])];
-    var group = (person && person[GROUP_BY_QUESTION]) || NO_ANSWER;
+    var groupOf = function (gq) { return (person && person[gq]) || NO_ANSWER; };
 
     if (isScale_(options)) {
       if (row[col.note] === 'playback_error' || row[col.choice] === '') return;
@@ -336,7 +338,9 @@ function updateSummary_() {
       if (scaleQs.indexOf(q) < 0) { scaleQs.push(q); scaleScopes[q] = []; }
       var nums = options.map(Number);
       scaleBounds[q] = [Math.min.apply(null, nums), Math.max.apply(null, nums)];
-      ['all videos', GROUP_BY_QUESTION + ' = ' + group, video].forEach(function (scope) {
+      var scopes = ['all videos']
+        .concat(GROUP_BY_QUESTIONS.map(function (gq) { return gq + ' = ' + groupOf(gq); }), [video]);
+      scopes.forEach(function (scope) {
         var k = q + '\u0000' + scope;
         if (!byScale[k]) { byScale[k] = []; scaleScopes[q].push(scope); }
         byScale[k].push(score);
@@ -374,7 +378,9 @@ function updateSummary_() {
     if (!mapped) { unmapped += 1; return; }
     var chosenMethod = mapped[options.indexOf(choice)];
     v.methods[chosenMethod] = (v.methods[chosenMethod] || 0) + 1;
-    if (groups.indexOf(group) < 0) groups.push(group);
+    GROUP_BY_QUESTIONS.forEach(function (gq) {
+      if (groupsBy[gq].indexOf(groupOf(gq)) < 0) groupsBy[gq].push(groupOf(gq));
+    });
     mapped.forEach(function (m) {
       if (methods.indexOf(m) < 0) methods.push(m);
       var mk = q + '\u0000' + m;
@@ -383,16 +389,20 @@ function updateSummary_() {
       e.chanceSum += 1 / options.length;
       if (m === chosenMethod) e.chosen += 1;
 
-      var gk = q + '\u0000' + group + '\u0000' + m;
-      var g = byGroup[gk] || (byGroup[gk] = { chosen: 0, shown: 0, raters: {} });
-      g.shown += 1;
-      g.raters[row[col.rater_id]] = true;
-      if (m === chosenMethod) g.chosen += 1;
+      GROUP_BY_QUESTIONS.forEach(function (gq) {
+        var gk = gq + '\u0000' + q + '\u0000' + groupOf(gq) + '\u0000' + m;
+        var g = byGroup[gk] || (byGroup[gk] = { chosen: 0, shown: 0, raters: {} });
+        g.shown += 1;
+        g.raters[row[col.rater_id]] = true;
+        if (m === chosenMethod) g.chosen += 1;
+      });
     });
   });
-  groups.sort(function (a, b) {
-    if (a === NO_ANSWER || b === NO_ANSWER) return a === NO_ANSWER ? 1 : -1;
-    return a < b ? -1 : a > b ? 1 : 0;
+  GROUP_BY_QUESTIONS.forEach(function (gq) {
+    groupsBy[gq].sort(function (a, b) {
+      if (a === NO_ANSWER || b === NO_ANSWER) return a === NO_ANSWER ? 1 : -1;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
   });
 
   var rows = [];
@@ -433,28 +443,34 @@ function updateSummary_() {
     note(unmapped + ' answer(s) are for videos missing from the Mapping tab and are not counted in this table.');
   }
 
-  if (groups.some(function (g) { return g !== NO_ANSWER; })) {
-    section('Preference by method, split by ' + GROUP_BY_QUESTION + ' (from the Participants tab)',
-      ['question', GROUP_BY_QUESTION, 'method', 'chosen', 'answers', 'preference', '95% CI low', '95% CI high', 'raters'],
+  GROUP_BY_QUESTIONS.forEach(function (gq) {
+    if (!groupsBy[gq].some(function (g) { return g !== NO_ANSWER; })) return;
+    section('Preference by method, split by ' + gq + ' (from the Participants tab)',
+      ['question', gq, 'method', 'chosen', 'answers', 'preference', '95% CI low', '95% CI high', 'raters'],
       [5, 6, 7]);
     questions.forEach(function (q) {
-      groups.forEach(function (grp) {
+      groupsBy[gq].forEach(function (grp) {
         methods.forEach(function (m) {
-          var g = byGroup[q + '\u0000' + grp + '\u0000' + m];
+          var g = byGroup[gq + '\u0000' + q + '\u0000' + grp + '\u0000' + m];
           if (!g || !g.shown) return;
           var ci = wilson_(g.chosen, g.shown);
           add([q, grp, m, g.chosen, g.shown, g.chosen / g.shown, ci[0], ci[1], Object.keys(g.raters).length]);
         });
       });
     });
-  }
+  });
 
   if (scaleQs.length) {
-    section('Rating questions — mean score (1 = lowest), for all videos, by ' + GROUP_BY_QUESTION + ', and per video',
+    section('Rating questions — mean score (1 = lowest), for all videos, by each background answer, and per video',
       ['question', 'scope', 'n', 'mean', 'SD', '95% CI low', '95% CI high'], [], [3, 4, 5, 6]);
     scaleQs.forEach(function (q) {
-      var groupPrefix = GROUP_BY_QUESTION + ' = ';
-      var rank = function (s) { return s === 'all videos' ? 0 : s.indexOf(groupPrefix) === 0 ? 1 : 2; };
+      var rank = function (s) {
+        if (s === 'all videos') return 0;
+        for (var i = 0; i < GROUP_BY_QUESTIONS.length; i++) {
+          if (s.indexOf(GROUP_BY_QUESTIONS[i] + ' = ') === 0) return 1 + i;
+        }
+        return 1 + GROUP_BY_QUESTIONS.length;
+      };
       scaleScopes[q].slice().sort(function (a, b) {
         return rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0);
       }).forEach(function (scope) {

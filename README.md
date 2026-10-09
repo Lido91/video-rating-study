@@ -5,7 +5,7 @@ A static website for a forced-choice video user study, built for GitHub Pages.
 Each video already contains several versions of the same clip side by side, labeled **A, B, C**. The rater watches the video and picks the version that is **most semantically aligned with the leftmost (GT) video**. The rater:
 
 1. Enters a participant ID (or gets one from the link, e.g. `?id=OU_01` or `?PROLIFIC_PID=...`) and gives consent.
-2. Answers a short background questionnaire, e.g. ASL proficiency (asked once; set in `config.js` → `survey`).
+2. Answers five background questions: hearing status, ASL proficiency, age they started learning ASL, years using ASL, and how often they use it (asked once; set in `config.js` → `survey`). No names or contact details are collected.
 3. Watches each video. The order is different for each rater.
 4. Picks A, B or C once the video has finished, by clicking a button or pressing A/B/C or 1/2/3.
    For videos with a GT Mesh panel (the 5-panel OpenASL videos), they also rate how well the GT Mesh reflects the real video, from 1 (very poorly) to 5 (very well); keys 1–5 answer this rating.
@@ -116,13 +116,13 @@ The site updates about a minute later. Send each rater their own link: `https://
 | `note` | `playback_error` if the video couldn't play on their device (choice left blank) |
 | `screen` | screen resolution in CSS pixels |
 
-**Participants** tab: one row per rater with their background answers (`asl_level` and any other `survey` question, one column each). If a rater answers again on another device, the latest row counts.
+**Participants** tab: one row per rater with their background answers, one column per question (`hearing_status`, `asl_level`, `asl_age_learned`, `asl_years`, `asl_frequency`). If a rater answers again on another device, the latest row counts.
 
 **Summary** tab: rebuilt every time an answer arrives or the Mapping tab changes. You can also use **Video ratings → Refresh summary** in the Sheet menu. Don't edit it by hand, because your changes will be overwritten. It has these tables:
 
 1. **Preference by method** (needs the Mapping tab): how often each method was chosen, its preference rate, a 95% confidence interval (Wilson), and the chance level (33.3% with 3 choices). If the CI's lower bound is above chance, raters preferred that method more often than chance.
-2. **Split by `asl_level`**: the same table for each proficiency level, from the Participants tab. To split by a different background question, change `GROUP_BY_QUESTION` at the top of `Code.gs` (and redeploy).
-3. **Rating questions** (e.g. `mesh_fidelity`): mean score with SD and 95% CI, for all videos, per `asl_level`, and per video.
+2. **Split by background**: the same table for each answer to `hearing_status`, `asl_level` and `asl_age_learned` (e.g. Deaf vs hearing raters, native vs late signers). To split by other background questions, edit `GROUP_BY_QUESTIONS` at the top of `Code.gs` (and redeploy).
+3. **Rating questions** (e.g. `mesh_fidelity`): mean score with SD and 95% CI, for all videos, per background answer, and per video.
 4. **Position check**: how often A, B and C were chosen. This should be close to chance unless one position always holds the best method.
 5. **Per video**: for each video, how many raters picked A, B and C, the mapping, and the votes per method.
 
@@ -143,7 +143,7 @@ pd.crosstab(df.video_id, df.method)          # votes per video
 | setting | default | |
 |---|---|---|
 | `studyId` | `video-study-v1` | Change it for a new round; returning raters will then start fresh |
-| `survey` | ASL proficiency (1–5) | Background questions asked once before the videos. Each has an `id`, `text` and `options` (`{ value, label }`; raters see the label, the Sheet stores the value). Leave out `options` for a free-text answer; add `optional: true` to allow skipping. `[]` = no questionnaire |
+| `survey` | Hearing status, ASL proficiency, age learned, years, frequency | Background questions asked once before the videos. Each has an `id`, `text` and `options` (`{ value, label }`; raters see the label, the Sheet stores the value). Leave out `options` for a free-text answer; add `optional: true` to allow skipping. `[]` = no questionnaire |
 | `choices` | `["A", "B", "C"]` | The labels inside your videos, in button order. Use `["A", "B", "C", "D"]` for 4 versions |
 | `questions` | A/B/C semantic alignment, plus a 1–5 GT Mesh rating on 5-panel videos | Each needs a unique `id` and `text`. Without `options` the answer is one of `choices`; with `options` (`{ value, label }`) it's a rating scale. `showFor: (video) => video.panels === 5` limits a question to some videos (`panels` comes from `make_video_list.py`) |
 | `randomizeOrder` | `true` | Each rater gets their own order of videos, which stays the same if they reload |
