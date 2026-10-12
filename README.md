@@ -173,6 +173,7 @@ Add `--seed 7` for a different set (add the new clips' sentences to `subtitles.t
 ## Good to know
 
 - **Saving is reliable.** Each answer is sent right away. If the connection drops, it is kept in the browser and re-sent later, and the Sheet ignores duplicates. A rater who closes the tab and returns with the same ID continues where they stopped.
+- **Answers from demo mode are sent later.** If a rater started while `scriptUrl` was still empty, their answers so far are kept in their browser and sent to the Sheet the next time they open the page after you connect it.
 - **Interrupted playback.** If the browser pauses a video midway (for example, the rater switches tabs), the button changes to "Play from start", and that interrupted play doesn't count against their limit.
 - **The endpoint is open.** Anyone who finds the Sheet URL could submit rows. The script checks every value (for example, that the choice was one of the options offered), but you should keep only rows from the participant IDs you handed out.
 - **Best on a computer.** Three versions side by side are small on a phone. The page still works there.

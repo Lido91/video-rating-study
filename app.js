@@ -670,6 +670,18 @@
   // ---------- start ----------
   if (demo) $("demo-banner").hidden = false;
 
+  // Answers given while the page ran in demo mode (before a Sheet was connected) are sent now.
+  // The Sheet ignores rows it already has, so this is safe to repeat.
+  if (!demo) {
+    const local = store.get(LOCAL_KEY, []);
+    if (local.length) {
+      const queued = new Set(queue.map((r) => r.submission_id));
+      queue = queue.concat(local.filter((r) => r && r.submission_id && !queued.has(r.submission_id)));
+      store.set(QUEUE_KEY, queue);
+      store.set(LOCAL_KEY, []);
+    }
+  }
+
   if (new URLSearchParams(location.search).has("reset")) {
     // For testing: forget progress on this device (unsent answers are kept).
     try {
