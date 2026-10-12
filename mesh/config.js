@@ -8,7 +8,7 @@ window.STUDY_CONFIG = {
 
   // The web app URL of this study's own Google Sheet (a separate Sheet from the main study;
   // see README, "GT Mesh study"). Leave empty to run in demo mode: answers stay in the browser.
-  scriptUrl: "",
+  scriptUrl: "https://script.google.com/macros/s/AKfycbzI5f4I_LaL2UIMXrXxWbYa6dg9PmyAYsyhQP4x3kZRtRNg3zDdHDzEOZJp44v9z6Avzw/exec",
 
   instructions: `Before the videos, you will answer a few short questions about your hearing status and your experience with ASL. They help us interpret your ratings; we do not ask for your name or any contact details.
 
