@@ -17,6 +17,8 @@
  *             (e.g. GT Mesh fidelity, 1–5), a position-bias check, and per-video vote
  *             counts. Rebuilt on every save and whenever Mapping is edited.
  *             A study with only rating questions (e.g. mesh/) gets just the rating table.
+ *
+ * @OnlyCurrentDoc  The script asks for access to this spreadsheet only, not all your Sheets.
  */
 
 // Shown by doGet, so you can check which version of this file is deployed.
