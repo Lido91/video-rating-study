@@ -16,10 +16,11 @@
  *             GROUP_BY_QUESTIONS background answers, mean scores for rating questions
  *             (e.g. GT Mesh fidelity, 1–5), a position-bias check, and per-video vote
  *             counts. Rebuilt on every save and whenever Mapping is edited.
+ *             A study with only rating questions (e.g. mesh/) gets just the rating table.
  */
 
 // Shown by doGet, so you can check which version of this file is deployed.
-var SCRIPT_VERSION = 4;
+var SCRIPT_VERSION = 5;
 
 var RATINGS_SHEET = 'Ratings';
 var PARTICIPANTS_SHEET = 'Participants';
@@ -426,21 +427,24 @@ function updateSummary_() {
     blocks.push({ start: rows.length, count: 0, pct: [], dec: [] });
   }
 
-  section('Preference by method — share of answers in which the method was chosen',
-    ['question', 'method', 'chosen', 'answers', 'preference', '95% CI low', '95% CI high', 'chance level'],
-    [4, 5, 6, 7]);
-  questions.forEach(function (q) {
-    methods.forEach(function (m) {
-      var e = byMethod[q + '\u0000' + m];
-      if (!e || !e.shown) return;
-      var ci = wilson_(e.chosen, e.shown);
-      add([q, m, e.chosen, e.shown, e.chosen / e.shown, ci[0], ci[1], e.chanceSum / e.shown]);
+  // The A/B/C tables only apply when some answers are choices rather than ratings.
+  if (questions.length) {
+    section('Preference by method — share of answers in which the method was chosen',
+      ['question', 'method', 'chosen', 'answers', 'preference', '95% CI low', '95% CI high', 'chance level'],
+      [4, 5, 6, 7]);
+    questions.forEach(function (q) {
+      methods.forEach(function (m) {
+        var e = byMethod[q + '\u0000' + m];
+        if (!e || !e.shown) return;
+        var ci = wilson_(e.chosen, e.shown);
+        add([q, m, e.chosen, e.shown, e.chosen / e.shown, ci[0], ci[1], e.chanceSum / e.shown]);
+      });
     });
-  });
-  if (!hasMapping) {
-    note('Fill in the Mapping tab (which method is A, B, C in each video) to see results per method.');
-  } else if (unmapped) {
-    note(unmapped + ' answer(s) are for videos missing from the Mapping tab and are not counted in this table.');
+    if (!hasMapping) {
+      note('Fill in the Mapping tab (which method is A, B, C in each video) to see results per method.');
+    } else if (unmapped) {
+      note(unmapped + ' answer(s) are for videos missing from the Mapping tab and are not counted in this table.');
+    }
   }
 
   GROUP_BY_QUESTIONS.forEach(function (gq) {
@@ -483,27 +487,30 @@ function updateSummary_() {
     });
   }
 
-  section('Position check — should be close to chance if raters are not biased by position',
-    ['question', 'position', 'chosen', 'answers', 'share'], [4]);
-  questions.forEach(function (q) {
-    labels.forEach(function (l) {
-      var e = byLabel[q + '\u0000' + l];
-      if (e) add([q, l, e.chosen, e.shown, e.chosen / e.shown]);
+  if (questions.length) {
+    section('Position check — should be close to chance if raters are not biased by position',
+      ['question', 'position', 'chosen', 'answers', 'share'], [4]);
+    questions.forEach(function (q) {
+      labels.forEach(function (l) {
+        var e = byLabel[q + '\u0000' + l];
+        if (e) add([q, l, e.chosen, e.shown, e.chosen / e.shown]);
+      });
     });
-  });
 
-  section('Per video — how many raters chose each version',
-    ['video_id', 'question', 'n'].concat(labels, ['mapping'],
-      methods.map(function (m) { return '# ' + m; }), ['unique_raters', 'playback_errors']), []);
-  videoKeys.sort();
-  videoKeys.forEach(function (vk) {
-    var v = byVideo[vk];
-    add([v.video, v.question, v.n]
-      .concat(labels.map(function (l) { return v.labels[l] || 0; }))
-      .concat([v.mapping])
-      .concat(methods.map(function (m) { return v.mapping ? (v.methods[m] || 0) : ''; }))
-      .concat([Object.keys(v.raters).length, v.errors]));
-  });
+    section('Per video — how many raters chose each version',
+      ['video_id', 'question', 'n'].concat(labels, ['mapping'],
+        methods.map(function (m) { return '# ' + m; }), ['unique_raters', 'playback_errors']), []);
+    videoKeys.sort();
+    videoKeys.forEach(function (vk) {
+      var v = byVideo[vk];
+      add([v.video, v.question, v.n]
+        .concat(labels.map(function (l) { return v.labels[l] || 0; }))
+        .concat([v.mapping])
+        .concat(methods.map(function (m) { return v.mapping ? (v.methods[m] || 0) : ''; }))
+        .concat([Object.keys(v.raters).length, v.errors]));
+    });
+  }
+  if (!rows.length) rows.push(['No answers yet.']);
 
   var width = 1;
   rows.forEach(function (r) { width = Math.max(width, r.length); });

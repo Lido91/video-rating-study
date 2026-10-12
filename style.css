@@ -134,6 +134,8 @@ h1 { font-size: 26px; line-height: 1.25; margin: 0 0 16px; }
 /* Shown at its own size, scaled down only if wider than the page or taller than the screen allows. */
 .stage video { display: block; max-width: 100%; max-height: calc(100vh - 300px); min-height: 160px; }
 
+.sentence { margin: 0 auto 12px; max-width: 960px; text-align: center; font-size: 18px; font-weight: 600; }
+
 .rating-card { margin: 16px auto 0; padding-top: 18px; max-width: 960px; }
 
 .question { margin-top: 22px; }

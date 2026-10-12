@@ -478,6 +478,12 @@
 
     $("progress-text").textContent = `Video ${position} of ${total}`;
     $("progress-fill").style.width = `${((position - 1) / total) * 100}%`;
+    // The English sentence, for pages that show it above the video (mesh/).
+    const sentence = $("sentence");
+    if (sentence) {
+      sentence.textContent = video.sentence ? `“${video.sentence}”` : "";
+      sentence.hidden = !video.sentence;
+    }
     renderQuestions(trial.locked);
     $("next-btn").disabled = true;
     setPlayButton("Loading…", false);
