@@ -93,7 +93,7 @@ There are no right or wrong answers; we are interested in your own judgement. Th
       panels: ["GT Video", "Avatar A", "Avatar B"],
       instructions: `Each clip shows the real signer (GT Video) on the left and two avatars, A and B. The avatars were created by computer from the English sentence alone; they never saw the video, so they will not copy the signer's exact timing or style.
 
-Watch the clip, then choose the avatar whose signing conveys the meaning of the sentence better, judging against the real signer. If they seem close, pick the one you think is slightly better. Which avatar is A and which is B changes from clip to clip.`,
+Watch the clip, then choose the avatar whose signing conveys the meaning of the sentence better, judging against the real signer. If they seem close, pick the one you think is slightly better.`,
       question: {
         id: "pair_preference",
         text: "Which avatar conveys the meaning of the signing in the real video (GT Video) better?",

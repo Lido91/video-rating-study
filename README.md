@@ -160,7 +160,7 @@ Add `--seed 7` for a different set (add the new clips' sentences to `subtitles.t
 
 A two-part study at https://lido91.github.io/video-rating-study/eval/ with its own page design (`eval/index.html`, `style.css`, `app.js`); settings are in `eval/config.js`. After the background questions, each rater does:
 
-1. **Compare two avatars** (10 clips, the comparison clips of the demo page). The real signer is shown next to Avatar A and Avatar B, and the rater picks the avatar that conveys the meaning better (`pair_preference`: `A` or `B`, no tie option). Each clip exists in both arrangements; every rater sees each arrangement on 5 of the 10 clips.
+1. **Compare two avatars** (10 clips, the comparison clips of the demo page). The real signer is shown next to Avatar A and Avatar B, and the rater picks the avatar that conveys the meaning better (`pair_preference`: `A` or `B`, no tie option). A and B are the same two systems, in the same order, in every clip.
 2. **Rate the reconstruction** (30 clips, the reconstruction clips of the demo page). GT Video next to GT Mesh, rated 1–5 with the same question (`mesh_fidelity`, same wording) and video ids as `mesh/`, so the answers can be compared clip by clip.
 
 Clips are shuffled within each part, the panel labels are drawn by the page (the ones burned into the videos are cut off), and the sentence is shown above each clip.
@@ -171,7 +171,7 @@ Clips are shuffled within each part, the panel labels are drawn by the page (the
 python3 eval/make_eval_videos.py --compare <comparison videos> --recon <GT Video | GT Mesh videos> --names X,Y
 ```
 
-**Mapping.** The Part 1 files have neutral names (`c01-<hash>.mp4`). Which system is A and B in each file is written to `eval/mapping.csv`, which is git-ignored: keep it private and paste it into the Sheet's Mapping tab (columns `video_id`, `A`, `B`; `clip` is the source clip, for reference). The Summary then shows the preference per system with a 95% CI and the position check.
+**Mapping.** The Part 1 files have neutral names (`c01-<hash>.mp4`). Which system is A and B is written to `eval/mapping.csv`, which is git-ignored: keep it private and paste it into the Sheet's Mapping tab (columns `video_id`, `A`, `B`; `clip` is the source clip, for reference). The Summary then shows the preference per system with a 95% CI and the position check.
 
 **Sheet.** Use a new Google Sheet (step 2, same `apps-script/Code.gs`) and put its web app URL in `eval/config.js` → `scriptUrl`. Until then the page runs in demo mode.
 
