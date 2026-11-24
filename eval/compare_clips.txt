@@ -1,0 +1,13 @@
+# Part 1 (compare two avatars): the 10 clips of the anonymous demo page, in its order (c01-c10).
+# OpenASL
+0706_bCEriaJUzm4-00-11-02.233-00-11-06.000.mp4
+0083_GmpPSx_UekY-00-00-24.333-00-00-25.233.mp4
+0348_rSiciLyYOyI-00-11-41.600-00-11-48.566.mp4
+0564_2HCnifZR1pw-00-08-19.133-00-08-24.466.mp4
+0615_Z1lF3UCb5sM-00-18-22.233-00-18-25.166.mp4
+0277_fSAY6QRd2Sk-00-07-34.266-00-07-35.766.mp4
+# How2Sign
+0000_G3RvsnzQrXQ_0-10-rgb_front.mp4
+0004_G3gm_C5UueQ_6-5-rgb_front.mp4
+0008_g2nvBjp0loQ_7-3-rgb_front.mp4
+0017_G3di9jJTqDs_0-10-rgb_front.mp4
